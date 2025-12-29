@@ -3,6 +3,7 @@
 #include "lrucache.h"
 #include "netutils.h"
 #include "protocol.h"
+#include "fakedns.h"
 #include "../libev/ev.h"
 #include <stddef.h>
 #include <stdint.h>
@@ -49,6 +50,7 @@ enum {
     OPT_ALWAYS_REUSE_PORT  = 0x01 << 5, // always enable so_reuseport (since linux 3.9+)
     OPT_ENABLE_TFO_ACCEPT  = 0x01 << 6, // enable tcp_fastopen for listen socket (server tfo)
     OPT_ENABLE_TFO_CONNECT = 0x01 << 7, // enable tcp_fastopen for connect socket (client tfo)
+    OPT_ENABLE_FAKEDNS     = 0x01 << 8, // enable fakedns feature
 };
 
 typedef struct {
@@ -84,6 +86,7 @@ static void udp_socks5_recv_tcpmessage_cb(evloop_t *evloop, evio_t *watcher, int
 static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, evio_t *watcher, int revents);
 static void udp_socks5_context_timeout_cb(evloop_t *evloop, evtimer_t *watcher, int revents);
 static void udp_tproxy_context_timeout_cb(evloop_t *evloop, evtimer_t *watcher, int revents);
+static void udp_dns_recv_cb(evloop_t *evloop, evio_t *watcher, int revents);
 
 static bool     g_verbose  = false;
 static uint16_t g_options  = OPT_ENABLE_TCP | OPT_ENABLE_UDP | OPT_ENABLE_IPV4 | OPT_ENABLE_IPV6;
@@ -105,6 +108,12 @@ static uint16_t         g_udp_idletimeout_sec                   = 60;
 static udp_socks5ctx_t *g_udp_socks5ctx_table                   = NULL;
 static udp_tproxyctx_t *g_udp_tproxyctx_table                   = NULL;
 static char             g_udp_dgram_buffer[UDP_DATAGRAM_MAXSIZ] = {0};
+
+static char      g_fakedns_ipstr[IP4STRLEN] = "127.0.0.1";
+static portno_t  g_fakedns_portno           = 5353;
+static char      g_fakedns_cidr[64]         = "198.18.0.0/15";
+static char      g_fakedns_cache_path[256]  = {0};
+static skaddr4_t g_fakedns_skaddr           = {0};
 
 static void print_command_help(void) {
     printf("usage: ipt2socks <options...>. the existing options are as follows:\n"
@@ -132,6 +141,11 @@ static void print_command_help(void) {
            " -v, --verbose                      print verbose log, affect performance\n"
            " -V, --version                      print ipt2socks version number and exit\n"
            " -h, --help                         print ipt2socks help information and exit\n"
+           "     --enable-fakedns               enable fakedns feature\n"
+           "     --fakedns-addr <addr>          fakedns listen address, default: 127.0.0.1\n"
+           "     --fakedns-port <port>          fakedns listen port, default: 5353\n"
+           "     --fakedns-ip-range <cidr>      fakedns ip range, default: 198.18.0.0/15\n"
+           "     --fakedns-cache <path>         fakedns cache file path, support persistence\n"
     );
 }
 
@@ -163,6 +177,11 @@ static void parse_command_args(int argc, char* argv[]) {
         {"verbose",       no_argument,       NULL, 'v'},
         {"version",       no_argument,       NULL, 'V'},
         {"help",          no_argument,       NULL, 'h'},
+        {"enable-fakedns",no_argument,       NULL, 1001},
+        {"fakedns-addr",  required_argument, NULL, 1002},
+        {"fakedns-port",  required_argument, NULL, 1003},
+        {"fakedns-ip-range", required_argument, NULL, 1004},
+        {"fakedns-cache", required_argument, NULL, 1005},
         {NULL,            0,                 NULL,   0},
     };
 
@@ -323,6 +342,27 @@ static void parse_command_args(int argc, char* argv[]) {
                     printf("[parse_command_args] unknown option: '%s'\n", longopt);
                 }
                 goto PRINT_HELP_AND_EXIT;
+            case 1001:
+                g_options |= OPT_ENABLE_FAKEDNS;
+                break;
+            case 1002:
+                if (strlen(optarg) + 1 > IP4STRLEN) {
+                    printf("[parse_command_args] fakedns address max length is 15: %s\n", optarg);
+                    goto PRINT_HELP_AND_EXIT;
+                }
+                strcpy(g_fakedns_ipstr, optarg);
+                break;
+            case 1003:
+                g_fakedns_portno = strtoul(optarg, NULL, 10);
+                break;
+            case 1004:
+                strncpy(g_fakedns_cidr, optarg, sizeof(g_fakedns_cidr) - 1);
+                g_fakedns_cidr[sizeof(g_fakedns_cidr) - 1] = '\0';
+                break;
+            case 1005:
+                strncpy(g_fakedns_cache_path, optarg, sizeof(g_fakedns_cache_path) - 1);
+                g_fakedns_cache_path[sizeof(g_fakedns_cache_path) - 1] = '\0';
+                break;
         }
     }
 
@@ -352,6 +392,9 @@ static void parse_command_args(int argc, char* argv[]) {
     build_socket_addr(AF_INET, &g_bind_skaddr4, g_bind_ipstr4, g_bind_portno);
     build_socket_addr(AF_INET6, &g_bind_skaddr6, g_bind_ipstr6, g_bind_portno);
     build_socket_addr(get_ipstr_family(g_server_ipstr), &g_server_skaddr, g_server_ipstr, g_server_portno);
+    if (g_options & OPT_ENABLE_FAKEDNS) {
+        build_socket_addr(AF_INET, &g_fakedns_skaddr, g_fakedns_ipstr, g_fakedns_portno);
+    }
     return;
 
 PRINT_HELP_AND_EXIT:
@@ -359,8 +402,25 @@ PRINT_HELP_AND_EXIT:
     exit(1);
 }
 
+static void on_signal_exit(int sig) {
+    IF_VERBOSE LOGINF("[on_signal_exit] caught signal %d, exiting...", sig);
+    if ((g_options & OPT_ENABLE_FAKEDNS) && g_fakedns_cache_path[0]) {
+        fakedns_save(g_fakedns_cache_path);
+    }
+    exit(0);
+}
+
 int main(int argc, char* argv[]) {
     signal(SIGPIPE, SIG_IGN);
+    // signal(SIGINT, on_signal_exit);  <-- Removed
+    // signal(SIGTERM, on_signal_exit); <-- Removed
+
+    sigset_t mask;
+    sigemptyset(&mask);
+    sigaddset(&mask, SIGINT);
+    sigaddset(&mask, SIGTERM);
+    pthread_sigmask(SIG_BLOCK, &mask, NULL);
+
     setvbuf(stdout, NULL, _IOLBF, 256);
     parse_command_args(argc, argv);
 
@@ -378,6 +438,15 @@ int main(int argc, char* argv[]) {
     if (g_options & OPT_ALWAYS_REUSE_PORT) LOGINF("[main] always enable reuseport feature");
     if (g_options & OPT_ENABLE_TFO_ACCEPT) LOGINF("[main] enable tfo for tcp server socket");
     if (g_options & OPT_ENABLE_TFO_CONNECT) LOGINF("[main] enable tfo for tcp client socket");
+    if (g_options & OPT_ENABLE_FAKEDNS) {
+        LOGINF("[main] enable fakedns feature");
+        LOGINF("[main] fakedns listen address: %s#%hu", g_fakedns_ipstr, g_fakedns_portno);
+        fakedns_init(g_fakedns_cidr);
+        if (g_fakedns_cache_path[0]) {
+             LOGINF("[main] fakedns cache path: %s", g_fakedns_cache_path);
+             fakedns_load(g_fakedns_cache_path);
+        }
+    }
     IF_VERBOSE LOGINF("[main] verbose mode (affect performance)");
 
     for (int i = 0; i < g_nthreads - 1; ++i) {
@@ -388,12 +457,46 @@ int main(int argc, char* argv[]) {
     }
     run_event_loop((void *)1);
 
+    IF_VERBOSE LOGINF("[main] exiting...");
+    if ((g_options & OPT_ENABLE_FAKEDNS) && g_fakedns_cache_path[0]) {
+        fakedns_save(g_fakedns_cache_path);
+    }
+
     return 0;
 }
 
-static void* run_event_loop(void *is_main_thread) {
-    evloop_t *evloop = ev_loop_new(0);
+#include <sys/signalfd.h>
 
+// ...
+
+static void on_signal_read(evloop_t *loop, evio_t *watcher, int revents __attribute__((unused))) {
+    struct signalfd_siginfo fdsi;
+    ssize_t s = read(watcher->fd, &fdsi, sizeof(struct signalfd_siginfo));
+    if (s != sizeof(struct signalfd_siginfo)) return;
+
+    IF_VERBOSE LOGINF("[on_signal_read] caught signal %d, stopping...", fdsi.ssi_signo);
+    ev_break(loop, EVBREAK_ALL);
+}
+
+static void* run_event_loop(void *is_main_thread) {
+    evloop_t *evloop = ev_loop_new(0); // Restore original helper, we don't need default loop for ev_io
+
+    if (is_main_thread) {
+         sigset_t mask;
+         sigemptyset(&mask);
+         sigaddset(&mask, SIGINT);
+         sigaddset(&mask, SIGTERM);
+         int sfd = signalfd(-1, &mask, SFD_NONBLOCK | SFD_CLOEXEC);
+         if (sfd < 0) {
+             LOGERR("[run_event_loop] signalfd: %s", strerror(errno));
+             exit(errno);
+         }
+         
+         static evio_t signal_watcher;
+         ev_io_init(&signal_watcher, on_signal_read, sfd, EV_READ);
+         ev_io_start(evloop, &signal_watcher);
+    }
+    
     if (g_options & OPT_ENABLE_TCP) {
         bool is_tproxy = !(g_options & OPT_TCP_USE_REDIRECT);
         bool is_tfo_accept = g_options & OPT_ENABLE_TFO_ACCEPT;
@@ -466,6 +569,17 @@ static void* run_event_loop(void *is_main_thread) {
         }
     }
 
+    if ((g_options & OPT_ENABLE_FAKEDNS) && is_main_thread) {
+        int sockfd = new_udp_normal_sockfd(AF_INET);
+        if (bind(sockfd, (void *)&g_fakedns_skaddr, sizeof(skaddr4_t)) < 0) {
+            LOGERR("[run_event_loop] bind fakedns address: %s", strerror(errno));
+            exit(errno);
+        }
+        evio_t *watcher = malloc(sizeof(*watcher));
+        ev_io_init(watcher, udp_dns_recv_cb, sockfd, EV_READ);
+        ev_io_start(evloop, watcher);
+    }
+
     ev_run(evloop, 0);
     return NULL;
 }
@@ -521,9 +635,25 @@ static void tcp_tproxy_accept_cb(evloop_t *evloop, evio_t *accept_watcher, int r
     ev_io_init(watcher, tcp_stream_payload_forward_cb, client_sockfd, EV_READ | EV_CUSTOM);
 
     /* build the ipv4/ipv6 proxy request (send to the socks5 proxy server) */
-    context->client_watcher.data = malloc(isipv4 ? sizeof(socks5_ipv4req_t) : sizeof(socks5_ipv6req_t));
-    context->client_length = isipv4 ? sizeof(socks5_ipv4req_t) : sizeof(socks5_ipv6req_t);
-    socks5_proxy_request_make(context->client_watcher.data, &skaddr);
+    /* build the ipv4/ipv6 proxy request (send to the socks5 proxy server) */
+    const char *fake_domain = NULL;
+    char domain_buf[256];
+    if ((g_options & OPT_ENABLE_FAKEDNS) && isipv4) {
+        if (fakedns_reverse_lookup(((skaddr4_t *)&skaddr)->sin_addr.s_addr, domain_buf, sizeof(domain_buf))) {
+            fake_domain = domain_buf;
+            LOGINF("[tcp_tproxy_accept_cb] fakedns hit: %u.%u.%u.%u -> %s", 
+                ((uint8_t *)&skaddr)[4], ((uint8_t *)&skaddr)[5], ((uint8_t *)&skaddr)[6], ((uint8_t *)&skaddr)[7], fake_domain);
+        }
+    }
+    
+    size_t reqlen_est = (fake_domain) ? (sizeof(socks5_domainreq_t) + strlen(fake_domain) + 2) : 
+                        (isipv4 ? sizeof(socks5_ipv4req_t) : sizeof(socks5_ipv6req_t));
+    
+    context->client_watcher.data = malloc(reqlen_est);
+    
+    size_t actual_len = 0;
+    socks5_proxy_request_make(context->client_watcher.data, &skaddr, fake_domain, &actual_len);
+    context->client_length = actual_len;
 
     watcher = &context->socks5_watcher;
     if (tfo_nsend >= 0 && (size_t)tfo_nsend >= tfo_datalen) {
@@ -851,17 +981,66 @@ static void udp_tproxy_recvmsg_cb(evloop_t *evloop, evio_t *tprecv_watcher, int 
         return;
     }
 
+    /* FakeDNS reverse lookup for domain resolution */
+    const char *fake_domain = NULL;
+    char domain_buf[256];
+    if ((g_options & OPT_ENABLE_FAKEDNS) && isipv4) {
+        uint32_t target_ip = ((skaddr4_t *)&skaddr)->sin_addr.s_addr;
+        if (fakedns_reverse_lookup(target_ip, domain_buf, sizeof(domain_buf))) {
+            fake_domain = domain_buf;
+            IF_VERBOSE {
+                LOGINF("[udp_tproxy_recvmsg_cb] fakedns hit: %u.%u.%u.%u -> %s",
+                       ((uint8_t *)&target_ip)[0], ((uint8_t *)&target_ip)[1],
+                       ((uint8_t *)&target_ip)[2], ((uint8_t *)&target_ip)[3],
+                       fake_domain);
+            }
+        }
+    }
+
+    /* Construct SOCKS5 UDP message header */
     socks5_udp4msg_t *udp4msg = (void *)g_udp_dgram_buffer;
     udp4msg->reserved = 0;
     udp4msg->fragment = 0;
-    udp4msg->addrtype = isipv4 ? SOCKS5_ADDRTYPE_IPV4 : SOCKS5_ADDRTYPE_IPV6;
-    if (isipv4) {
-        udp4msg->ipaddr4 = ((skaddr4_t *)&skaddr)->sin_addr.s_addr;
-        udp4msg->portnum = ((skaddr4_t *)&skaddr)->sin_port;
+
+    if (fake_domain) {
+        /* Use domain format: [reserved(2)] [fragment(1)] [addrtype(1)] [len(1)] [domain(n)] [port(2)] */
+        udp4msg->addrtype = SOCKS5_ADDRTYPE_DOMAIN;
+        size_t domain_len = strlen(fake_domain);
+        size_t domain_headerlen = 4 + 1 + domain_len + 2;
+        
+        /* Adjust DNS payload position for domain header size difference */
+        if (domain_headerlen > headerlen) {
+            /* Move DNS payload forward by the difference */
+            size_t move_offset = domain_headerlen - headerlen;
+            memmove((uint8_t *)g_udp_dgram_buffer + domain_headerlen,
+                   (uint8_t *)g_udp_dgram_buffer + headerlen,
+                   nrecv);
+        } else if (domain_headerlen < headerlen) {
+            /* Move DNS payload backward (unlikely but handle it) */
+            size_t move_offset = headerlen - domain_headerlen;
+            memmove((uint8_t *)g_udp_dgram_buffer + domain_headerlen,
+                   (uint8_t *)g_udp_dgram_buffer + headerlen,
+                   nrecv);
+        }
+        /* else: headerlen == domain_headerlen, no move needed */
+        
+        ((uint8_t *)g_udp_dgram_buffer)[4] = (uint8_t)domain_len;
+        memcpy((uint8_t *)g_udp_dgram_buffer + 5, fake_domain, domain_len);
+        memcpy((uint8_t *)g_udp_dgram_buffer + 5 + domain_len,
+               &((skaddr4_t *)&skaddr)->sin_port, 2);
+        
+        headerlen = domain_headerlen;
     } else {
-        socks5_udp6msg_t *udp6msg = (void *)g_udp_dgram_buffer;
-        memcpy(&udp6msg->ipaddr6, &skaddr.sin6_addr.s6_addr, IP6BINLEN);
-        udp6msg->portnum = skaddr.sin6_port;
+        /* Use IP format (original logic) */
+        udp4msg->addrtype = isipv4 ? SOCKS5_ADDRTYPE_IPV4 : SOCKS5_ADDRTYPE_IPV6;
+        if (isipv4) {
+            udp4msg->ipaddr4 = ((skaddr4_t *)&skaddr)->sin_addr.s_addr;
+            udp4msg->portnum = ((skaddr4_t *)&skaddr)->sin_port;
+        } else {
+            socks5_udp6msg_t *udp6msg = (void *)g_udp_dgram_buffer;
+            memcpy(&udp6msg->ipaddr6, &skaddr.sin6_addr.s6_addr, IP6BINLEN);
+            udp6msg->portnum = skaddr.sin6_port;
+        }
     }
 
     udp_socks5ctx_t *context = udp_socks5ctx_get(&g_udp_socks5ctx_table, &key_ipport);
@@ -886,6 +1065,16 @@ static void udp_tproxy_recvmsg_cb(evloop_t *evloop, evio_t *tprecv_watcher, int 
 
         context = malloc(sizeof(*context));
         memcpy(&context->key_ipport, &key_ipport, sizeof(key_ipport));
+
+        // Save original destination and protocol family
+        context->dest_is_ipv4 = isipv4;
+        if (isipv4) {
+            context->orig_dstaddr.ip.ip4 = ((skaddr4_t *)&skaddr)->sin_addr.s_addr;
+            context->orig_dstaddr.port = ((skaddr4_t *)&skaddr)->sin_port;
+        } else {
+            memcpy(&context->orig_dstaddr.ip.ip6, &skaddr.sin6_addr.s6_addr, IP6BINLEN);
+            context->orig_dstaddr.port = skaddr.sin6_port;
+        }
 
         evio_t *watcher = &context->tcp_watcher;
         if (tfo_nsend >= 0 && (size_t)tfo_nsend >= tfo_datalen) {
@@ -912,12 +1101,15 @@ static void udp_tproxy_recvmsg_cb(evloop_t *evloop, evio_t *tprecv_watcher, int 
         if (del_context) ev_invoke(evloop, &del_context->idle_timer, EV_CUSTOM);
         return;
     }
+    
+    /* Tunnel not ready if udp_watcher.data != NULL */
     if (context->udp_watcher.data) {
         IF_VERBOSE LOGINF("[udp_tproxy_recvmsg_cb] tunnel is not ready, discard this msg");
         return;
     }
 
     ev_timer_again(evloop, &context->idle_timer);
+
     nrecv = send(context->udp_watcher.fd, g_udp_dgram_buffer, headerlen + nrecv, 0);
     if (nrecv < 0) {
         parse_socket_addr(&skaddr, ipstr, &portno);
@@ -925,8 +1117,13 @@ static void udp_tproxy_recvmsg_cb(evloop_t *evloop, evio_t *tprecv_watcher, int 
         return;
     }
     IF_VERBOSE {
-        parse_socket_addr(&skaddr, ipstr, &portno);
-        LOGINF("[udp_tproxy_recvmsg_cb] send to %s#%hu, nsend:%zd", ipstr, portno, nrecv);
+        if (fake_domain) {
+            portno = ntohs(((skaddr4_t *)&skaddr)->sin_port);
+            LOGINF("[udp_tproxy_recvmsg_cb] send to %s#%hu, nsend:%zd", fake_domain, portno, nrecv);
+        } else {
+            parse_socket_addr(&skaddr, ipstr, &portno);
+            LOGINF("[udp_tproxy_recvmsg_cb] send to %s#%hu, nsend:%zd", ipstr, portno, nrecv);
+        }
     }
 }
 
@@ -1125,10 +1322,20 @@ static void udp_socks5_recv_proxyresp_cb(evloop_t *evloop, evio_t *tcp_watcher, 
     ssize_t nsend = send(udp_sockfd, context->udp_watcher.data + 2, *(uint16_t *)context->udp_watcher.data, 0);
     if (nsend < 0 || g_verbose) {
         char ipstr[IP6STRLEN]; portno_t portno;
-        if (((socks5_udp4msg_t *)(context->udp_watcher.data + 2))->addrtype == SOCKS5_ADDRTYPE_IPV4) {
+        uint8_t addrtype = ((socks5_udp4msg_t *)(context->udp_watcher.data + 2))->addrtype;
+        
+        if (addrtype == SOCKS5_ADDRTYPE_IPV4) {
             socks5_udp4msg_t *udp4msg = context->udp_watcher.data + 2;
             inet_ntop(AF_INET, &udp4msg->ipaddr4, ipstr, IP6STRLEN);
             portno = ntohs(udp4msg->portnum);
+        } else if (addrtype == SOCKS5_ADDRTYPE_DOMAIN) {
+            /* Domain format: extract domain and port for logging */
+            uint8_t *msg = context->udp_watcher.data + 2;
+            uint8_t domain_len = msg[4];
+            memcpy(ipstr, msg + 5, domain_len);
+            ipstr[domain_len] = '\0';
+            memcpy(&portno, msg + 5 + domain_len, 2);
+            portno = ntohs(portno);
         } else {
             socks5_udp6msg_t *udp6msg = context->udp_watcher.data + 2;
             inet_ntop(AF_INET6, &udp6msg->ipaddr6, ipstr, IP6STRLEN);
@@ -1183,8 +1390,43 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, evio_t *udp_watcher,
     }
     socks5_udp4msg_t *udp4msg = (void *)g_udp_dgram_buffer;
     bool isipv4 = udp4msg->addrtype == SOCKS5_ADDRTYPE_IPV4;
-    if (!isipv4 && (size_t)nrecv < sizeof(socks5_udp6msg_t)) {
-        LOGERR("[udp_socks5_recv_udpmessage_cb] recv from socks5 server: message too small");
+    bool isipv6 = udp4msg->addrtype == SOCKS5_ADDRTYPE_IPV6;
+    bool isdomain = udp4msg->addrtype == SOCKS5_ADDRTYPE_DOMAIN;
+
+    /* Parse address and calculate header length */
+    size_t headerlen;
+    if (isipv4) {
+        headerlen = sizeof(socks5_udp4msg_t);
+        if ((size_t)nrecv < headerlen) {
+            LOGERR("[udp_socks5_recv_udpmessage_cb] recv from socks5 server: message too small");
+            return;
+        }
+    } else if (isipv6) {
+        headerlen = sizeof(socks5_udp6msg_t);
+        if ((size_t)nrecv < headerlen) {
+            LOGERR("[udp_socks5_recv_udpmessage_cb] recv from socks5 server: message too small");
+            return;
+        }
+    } else if (isdomain) {
+        /* Domain format: [reserved(2)] [fragment(1)] [addrtype(1)] [len(1)] [domain(n)] [port(2)] */
+        if ((size_t)nrecv < 5) {
+            LOGERR("[udp_socks5_recv_udpmessage_cb] recv from socks5 server: domain message too small");
+            return;
+        }
+        uint8_t domain_len = ((uint8_t *)g_udp_dgram_buffer)[4];
+        headerlen = 4 + 1 + domain_len + 2;
+        if ((size_t)nrecv < headerlen) {
+            LOGERR("[udp_socks5_recv_udpmessage_cb] recv from socks5 server: domain message truncated");
+            return;
+        }
+        IF_VERBOSE {
+            char domain_buf[256];
+            memcpy(domain_buf, (uint8_t *)g_udp_dgram_buffer + 5, domain_len);
+            domain_buf[domain_len] = '\0';
+            LOGINF("[udp_socks5_recv_udpmessage_cb] recv domain response: %s, nrecv:%zd", domain_buf, nrecv);
+        }
+    } else {
+        LOGERR("[udp_socks5_recv_udpmessage_cb] unsupported address type: 0x%02x", udp4msg->addrtype);
         return;
     }
 
@@ -1192,27 +1434,87 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, evio_t *udp_watcher,
     udp_socks5ctx_use(&g_udp_socks5ctx_table, socks5ctx);
     ev_timer_again(evloop, &socks5ctx->idle_timer);
 
-    ip_port_t fromipport = {.ip = {0}, .port = 0};
-    if (isipv4) {
-        fromipport.ip.ip4 = udp4msg->ipaddr4;
-        fromipport.port = udp4msg->portnum;
-    } else {
-        socks5_udp6msg_t *udp6msg = (void *)g_udp_dgram_buffer;
-        memcpy(&fromipport.ip.ip6, &udp6msg->ipaddr6, IP6BINLEN);
-        fromipport.port = udp6msg->portnum;
+    /* For domain responses, we don't parse fromipport - we send back to the original requester */
+    /* The original requester is stored in socks5ctx->key_ipport */
+
+    if (isdomain) {
+        /* Domain response: need to bind to source address (FakeIP if available) */
+        uint8_t domain_len = ((uint8_t *)g_udp_dgram_buffer)[4];
+        char domain_buf[256];
+        portno_t from_port;
+        
+        memcpy(domain_buf, (uint8_t *)g_udp_dgram_buffer + 5, domain_len);
+        domain_buf[domain_len] = '\0';
+        memcpy(&from_port, (uint8_t *)g_udp_dgram_buffer + 5 + domain_len, 2);
+        
+        /* Try to reverse lookup domain to FakeIP */
+        uint32_t fakeip = 0;
+        if (g_options & OPT_ENABLE_FAKEDNS) {
+            fakeip = fakedns_lookup_domain(domain_buf);
+        }
+        
+        if (!fakeip) {
+            /* No FakeIP for this domain, cannot send with proper source address */
+            LOGWAR("[udp_socks5_recv_udpmessage_cb] domain '%s' has no FakeIP mapping, cannot send response", domain_buf);
+            return;
+        }
+        
+        /* Create tproxy context with FakeIP as source */
+        ip_port_t fromipport = {.ip = {0}, .port = from_port};
+        fromipport.ip.ip4 = fakeip;
+        
+        udp_tproxyctx_t *tproxyctx = udp_tproxyctx_get(&g_udp_tproxyctx_table, &fromipport);
+        if (!tproxyctx) {
+            skaddr4_t fromskaddr = {0};
+            fromskaddr.sin_family = AF_INET;
+            fromskaddr.sin_addr.s_addr = fakeip;
+            fromskaddr.sin_port = from_port;
+            
+            int tproxy_sockfd = new_udp_tpsend_sockfd(AF_INET);
+            if (bind(tproxy_sockfd, (void *)&fromskaddr, sizeof(skaddr4_t)) < 0) {
+                LOGERR("[udp_socks5_recv_udpmessage_cb] bind tproxy reply address (FakeIP): %s", strerror(errno));
+                close(tproxy_sockfd);
+                return;
+            }
+            
+            tproxyctx = malloc(sizeof(*tproxyctx));
+            memcpy(&tproxyctx->key_ipport, &fromipport, sizeof(fromipport));
+            tproxyctx->udp_sockfd = tproxy_sockfd;
+            evtimer_t *timer = &tproxyctx->idle_timer;
+            ev_timer_init(timer, udp_tproxy_context_timeout_cb, 0, g_udp_idletimeout_sec);
+            udp_tproxyctx_t *del_context = udp_tproxyctx_add(&g_udp_tproxyctx_table, tproxyctx);
+            if (del_context) ev_invoke(evloop, &del_context->idle_timer, EV_CUSTOM);
+        }
+        ev_timer_again(evloop, &tproxyctx->idle_timer);
+        
+        /* Send response to original requester */
+        ip_port_t *toipport = &socks5ctx->key_ipport;
+        skaddr4_t toskaddr = {0};
+        toskaddr.sin_family = AF_INET;
+        toskaddr.sin_addr.s_addr = toipport->ip.ip4;
+        toskaddr.sin_port = toipport->port;
+        
+        size_t payload_len = nrecv - headerlen;
+        ssize_t nsend = sendto(tproxyctx->udp_sockfd, (void *)g_udp_dgram_buffer + headerlen, payload_len, 0,
+                               (void *)&toskaddr, sizeof(skaddr4_t));
+        if (nsend < 0) {
+            char ipstr[IP6STRLEN]; portno_t portno;
+            parse_socket_addr((void *)&toskaddr, ipstr, &portno);
+            LOGERR("[udp_socks5_recv_udpmessage_cb] send to %s#%hu: %s", ipstr, portno, strerror(errno));
+        }
+        return;
     }
 
+    /* For IP responses: use saved original destination (FakeIP/真实IP) */
+    ip_port_t fromipport = socks5ctx->orig_dstaddr;
+    bool dest_isipv4 = socks5ctx->dest_is_ipv4;
+
     char ipstr[IP6STRLEN]; portno_t portno;
-    IF_VERBOSE {
-        inet_ntop(isipv4 ? AF_INET : AF_INET6, isipv4 ? (void *)&fromipport.ip.ip4 : (void *)&fromipport.ip.ip6, ipstr, IP6STRLEN);
-        portno = ntohs(fromipport.port);
-        LOGINF("[udp_socks5_recv_udpmessage_cb] recv from %s#%hu, nrecv:%zd", ipstr, portno, nrecv);
-    }
 
     udp_tproxyctx_t *tproxyctx = udp_tproxyctx_get(&g_udp_tproxyctx_table, &fromipport);
     if (!tproxyctx) {
         skaddr6_t fromskaddr = {0};
-        if (isipv4) {
+        if (dest_isipv4) {
             skaddr4_t *addr = (void *)&fromskaddr;
             addr->sin_family = AF_INET;
             addr->sin_addr.s_addr = fromipport.ip.ip4;
@@ -1222,8 +1524,8 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, evio_t *udp_watcher,
             memcpy(&fromskaddr.sin6_addr.s6_addr, &fromipport.ip.ip6, IP6BINLEN);
             fromskaddr.sin6_port = fromipport.port;
         }
-        int tproxy_sockfd = new_udp_tpsend_sockfd(isipv4 ? AF_INET : AF_INET6);
-        if (bind(tproxy_sockfd, (void *)&fromskaddr, isipv4 ? sizeof(skaddr4_t) : sizeof(skaddr6_t)) < 0) {
+        int tproxy_sockfd = new_udp_tpsend_sockfd(dest_isipv4 ? AF_INET : AF_INET6);
+        if (bind(tproxy_sockfd, (void *)&fromskaddr, dest_isipv4 ? sizeof(skaddr4_t) : sizeof(skaddr6_t)) < 0) {
             LOGERR("[udp_socks5_recv_udpmessage_cb] bind tproxy reply address: %s", strerror(errno));
             close(tproxy_sockfd);
             return;
@@ -1240,7 +1542,7 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, evio_t *udp_watcher,
 
     ip_port_t *toipport = &socks5ctx->key_ipport;
     skaddr6_t toskaddr = {0};
-    if (isipv4) {
+    if (dest_isipv4) {
         skaddr4_t *addr = (void *)&toskaddr;
         addr->sin_family = AF_INET;
         addr->sin_addr.s_addr = toipport->ip.ip4;
@@ -1251,8 +1553,7 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, evio_t *udp_watcher,
         toskaddr.sin6_port = toipport->port;
     }
 
-    size_t headerlen = isipv4 ? sizeof(socks5_udp4msg_t) : sizeof(socks5_udp6msg_t);
-    nrecv = sendto(tproxyctx->udp_sockfd, (void *)g_udp_dgram_buffer + headerlen, nrecv - headerlen, 0, (void *)&toskaddr, isipv4 ? sizeof(skaddr4_t) : sizeof(skaddr6_t));
+    nrecv = sendto(tproxyctx->udp_sockfd, (void *)g_udp_dgram_buffer + headerlen, nrecv - headerlen, 0, (void *)&toskaddr, dest_isipv4 ? sizeof(skaddr4_t) : sizeof(skaddr6_t));
     if (nrecv < 0) {
         parse_socket_addr(&toskaddr, ipstr, &portno);
         LOGERR("[udp_socks5_recv_udpmessage_cb] send to %s#%hu: %s", ipstr, portno, strerror(errno));
@@ -1295,4 +1596,23 @@ static void udp_tproxy_context_timeout_cb(evloop_t *evloop, evtimer_t *idle_time
     ev_timer_stop(evloop, idle_timer);
     close(context->udp_sockfd);
     free(context);
+}
+static void udp_dns_recv_cb(evloop_t *evloop, evio_t *watcher, int revents) {
+    socklen_t addrlen = sizeof(skaddr4_t);
+    skaddr4_t addr;
+    
+    ssize_t nrecv = recvfrom(watcher->fd, g_udp_dgram_buffer, UDP_DATAGRAM_MAXSIZ, 0, (struct sockaddr *)&addr, &addrlen);
+    if (nrecv < 0) {
+        if (errno != EAGAIN && errno != EWOULDBLOCK) {
+            LOGERR("[udp_dns_recv_cb] recvfrom: %s", strerror(errno));
+        }
+        return;
+    }
+    
+    // Process Query
+    size_t nresp = fakedns_process_query((uint8_t*)g_udp_dgram_buffer, nrecv, (uint8_t*)g_udp_dgram_buffer, UDP_DATAGRAM_MAXSIZ);
+    
+    if (nresp > 0) {
+        sendto(watcher->fd, g_udp_dgram_buffer, nresp, 0, (struct sockaddr *)&addr, addrlen);
+    }
 }

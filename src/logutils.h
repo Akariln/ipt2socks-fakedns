@@ -23,4 +23,13 @@
                 ##__VA_ARGS__);                                              \
     } while (0)
 
+#define LOGWAR(fmt, ...)                                                     \
+    do {                                                                     \
+        struct tm *tm = localtime_r(&(time_t){time(NULL)}, &(struct tm){0}); \
+        printf("\e[1;33m%04d-%02d-%02d %02d:%02d:%02d WAR:\e[0m " fmt "\n",  \
+                tm->tm_year + 1900, tm->tm_mon + 1, tm->tm_mday,             \
+                tm->tm_hour,        tm->tm_min,     tm->tm_sec,              \
+                ##__VA_ARGS__);                                              \
+    } while (0)
+
 #endif
