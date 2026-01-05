@@ -25,6 +25,7 @@ static uint32_t g_fakeip_net_host = 0; /* Host byte order */
 static uint32_t g_fakeip_mask_host = 0; /* Host byte order */
 static uint32_t g_pool_size = 0;
 static uint32_t g_pool_used = 0;
+static char g_cidr_str[64] = {0};
 
 static const uint32_t FAKEDNS_TTL = 43200; // 12 hours
 
@@ -52,6 +53,11 @@ void fakedns_init(const char *cidr_str) {
     char ip_str[64];
     strncpy(ip_str, cidr_str, sizeof(ip_str) - 1);
     ip_str[sizeof(ip_str) - 1] = '\0';
+    
+    // Store global CIDR for persistence validation
+    strncpy(g_cidr_str, cidr_str, sizeof(g_cidr_str) - 1);
+    g_cidr_str[sizeof(g_cidr_str) - 1] = '\0';
+
     char *slash = strchr(ip_str, '/');
     if (!slash) {
         LOGERR("[fakedns_init] invalid cidr format: %s", cidr_str);
@@ -346,7 +352,7 @@ size_t fakedns_process_query(const uint8_t *query, size_t qlen, uint8_t *buffer,
 }
 
 static const uint32_t FAKEDNS_MAGIC = 0x464E5344; // "DNSF" Little Endian -> "FNSD"
-static const uint32_t FAKEDNS_VERSION = 1;
+static const uint32_t FAKEDNS_VERSION = 2;
 
 void fakedns_save(const char *path) {
     if (!path || !g_fakedns_table) return;
@@ -371,6 +377,11 @@ void fakedns_save(const char *path) {
     fwrite(&FAKEDNS_MAGIC, 4, 1, fp);
     fwrite(&FAKEDNS_VERSION, 4, 1, fp);
     fwrite(&count, 4, 1, fp);
+
+    // Version 2: Write CIDR
+    uint16_t cidr_len = strlen(g_cidr_str);
+    fwrite(&cidr_len, 2, 1, fp);
+    fwrite(g_cidr_str, 1, cidr_len, fp);
 
     // Write Entries
     HASH_ITER(hh, g_fakedns_table, entry, tmp) {
@@ -410,9 +421,37 @@ void fakedns_load(const char *path) {
         return;
     }
     if (version != FAKEDNS_VERSION) {
-        LOGERR("[fakedns_load] invalid version: %u", version);
+        LOGERR("[fakedns_load] version mismatch: file %u, current %u", version, FAKEDNS_VERSION);
         fclose(fp);
         return;
+    }
+
+    // Version 2: Check CIDR
+    if (version >= 2) {
+        uint16_t cidr_len;
+        if (fread(&cidr_len, 2, 1, fp) != 1) {
+            LOGERR("[fakedns_load] cidr len read error");
+            fclose(fp);
+            return;
+        }
+        if (cidr_len >= 64) {
+             LOGERR("[fakedns_load] cidr len too long: %u", cidr_len);
+             fclose(fp);
+             return;
+        }
+        char file_cidr[64];
+        if (fread(file_cidr, 1, cidr_len, fp) != cidr_len) {
+            LOGERR("[fakedns_load] cidr read error");
+            fclose(fp);
+            return;
+        }
+        file_cidr[cidr_len] = '\0';
+        
+        if (strcmp(file_cidr, g_cidr_str) != 0) {
+            LOGERR("[fakedns_load] CIDR mismatch. File: %s, Current: %s. Ignoring saved data.", file_cidr, g_cidr_str);
+            fclose(fp);
+            return;
+        }
     }
 
     pthread_rwlock_wrlock(&g_fakedns_rwlock);  // Use write lock for loading
@@ -434,6 +473,7 @@ void fakedns_load(const char *path) {
         uint32_t ip_host = ntohl(ip);
         if ((ip_host & g_fakeip_mask_host) != g_fakeip_net_host) {
             fseek(fp, dlen, SEEK_CUR); // Skip domain
+            // Even if CIDR matches string-wise, let's be double safe
             continue;
         }
 
