@@ -84,12 +84,12 @@ void fakedns_init(const char *cidr_str) {
     g_fakeip_mask_host = mask_host;
     g_pool_size = (prefix_len == 32) ? 1 : (1U << (32 - prefix_len));
 
-    LOGINF("[fakedns_init] IP range: %s/%d", ip_str, prefix_len);
-    LOGINF("[fakedns_init] Pool size: %u addresses (%.1f KB memory)", 
+    LOG_ALWAYS_INF("[fakedns_init] IP range: %s/%d", ip_str, prefix_len);
+    LOG_ALWAYS_INF("[fakedns_init] Pool size: %u addresses (%.1f KB memory)", 
            g_pool_size, (float)(g_pool_size * sizeof(fakedns_entry_t)) / 1024.0f);
-    LOGINF("[fakedns_init] Warning threshold: %.0f%% (%u entries)", 
+    LOG_ALWAYS_INF("[fakedns_init] Warning threshold: %.0f%% (%u entries)", 
            FAKEDNS_POOL_WARN_THRESHOLD * 100.0f, (uint32_t)(g_pool_size * FAKEDNS_POOL_WARN_THRESHOLD));
-    LOGINF("[fakedns_init] Critical threshold: %.0f%% (%u entries)", 
+    LOG_ALWAYS_INF("[fakedns_init] Critical threshold: %.0f%% (%u entries)", 
            FAKEDNS_POOL_CRITICAL_THRESHOLD * 100.0f, (uint32_t)(g_pool_size * FAKEDNS_POOL_CRITICAL_THRESHOLD));
 }
 
@@ -196,11 +196,9 @@ uint32_t fakedns_lookup_domain(const char *domain) {
                 // Collision
                 /* Strategy A: Overwrite if expired */
                 if (entry->expire < now) {
-                     IF_VERBOSE {
-                         LOGINF("[fakedns] overwrite expired entry: %s -> %s (IP: %u.%u.%u.%u)",
-                                entry->domain, domain,
-                                ip_net & 0xFF, (ip_net >> 8) & 0xFF, (ip_net >> 16) & 0xFF, (ip_net >> 24) & 0xFF);
-                     }
+                     LOGINF("[fakedns] overwrite expired entry: %s -> %s (IP: %u.%u.%u.%u)",
+                            entry->domain, domain,
+                            ip_net & 0xFF, (ip_net >> 8) & 0xFF, (ip_net >> 16) & 0xFF, (ip_net >> 24) & 0xFF);
                      
                      // Reset entry for new domain
                      strncpy(entry->domain, domain, sizeof(entry->domain) - 1);
@@ -394,7 +392,7 @@ void fakedns_save(const char *path) {
 
     pthread_rwlock_unlock(&g_fakedns_rwlock);
     fclose(fp);
-    LOGINF("[fakedns_save] saved %u entries to %s", count, path);
+    LOG_ALWAYS_INF("[fakedns_save] saved %u entries to %s", count, path);
 }
 
 void fakedns_load(const char *path) {
@@ -514,5 +512,5 @@ void fakedns_load(const char *path) {
 
     pthread_rwlock_unlock(&g_fakedns_rwlock);
     fclose(fp);
-    LOGINF("[fakedns_load] loaded %u/%u entries from %s", loaded, count, path);
+    LOG_ALWAYS_INF("[fakedns_load] loaded %u/%u entries from %s", loaded, count, path);
 }

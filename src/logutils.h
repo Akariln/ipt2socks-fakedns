@@ -9,13 +9,20 @@
 extern bool g_verbose;
 #define IF_VERBOSE if (g_verbose)
 
-#define LOGINF(fmt, ...)                                                     \
+#define LOG_ALWAYS_INF(fmt, ...)                                             \
     do {                                                                     \
         struct tm *tm = localtime_r(&(time_t){time(NULL)}, &(struct tm){0}); \
         printf("\e[1;32m%04d-%02d-%02d %02d:%02d:%02d INF:\e[0m " fmt "\n",  \
                 tm->tm_year + 1900, tm->tm_mon + 1, tm->tm_mday,             \
                 tm->tm_hour,        tm->tm_min,     tm->tm_sec,              \
                 ##__VA_ARGS__);                                              \
+    } while (0)
+
+#define LOGINF(fmt, ...)           \
+    do {                           \
+        if (g_verbose) {           \
+             LOG_ALWAYS_INF(fmt, ##__VA_ARGS__); \
+        }                          \
     } while (0)
 
 #define LOGERR(fmt, ...)                                                     \

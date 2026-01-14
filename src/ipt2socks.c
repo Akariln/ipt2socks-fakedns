@@ -417,7 +417,7 @@ PRINT_HELP_AND_EXIT:
 }
 
 static void on_signal_exit(int sig) {
-    IF_VERBOSE LOGINF("[on_signal_exit] caught signal %d, exiting...", sig);
+    LOG_ALWAYS_INF("[on_signal_exit] caught signal %d, exiting...", sig);
     if ((g_options & OPT_ENABLE_FAKEDNS) && g_fakedns_cache_path[0]) {
         fakedns_save(g_fakedns_cache_path);
     }
@@ -438,30 +438,30 @@ int main(int argc, char* argv[]) {
     setvbuf(stdout, NULL, _IOLBF, 256);
     parse_command_args(argc, argv);
 
-    LOGINF("[main] server address: %s#%hu", g_server_ipstr, g_server_portno);
-    if (g_options & OPT_ENABLE_IPV4) LOGINF("[main] listen address: %s#%hu", g_bind_ipstr4, g_bind_portno);
-    if (g_options & OPT_ENABLE_IPV6) LOGINF("[main] listen address: %s#%hu", g_bind_ipstr6, g_bind_portno);
-    if (g_tcp_syncnt_max) LOGINF("[main] max number of syn retries: %hhu", g_tcp_syncnt_max);
-    LOGINF("[main] udp session cache capacity: %hu", lrucache_get_maxsize());
-    LOGINF("[main] udp session idle timeout: %hu", g_udp_idletimeout_sec);
-    LOGINF("[main] number of worker threads: %hhu", g_nthreads);
-    LOGINF("[main] max file descriptor limit: %zu", get_nofile_limit());
-    if (g_options & OPT_ENABLE_TCP) LOGINF("[main] enable tcp transparent proxy");
-    if (g_options & OPT_ENABLE_UDP) LOGINF("[main] enable udp transparent proxy");
-    if (g_options & OPT_TCP_USE_REDIRECT) LOGINF("[main] use redirect instead of tproxy");
-    if (g_options & OPT_ALWAYS_REUSE_PORT) LOGINF("[main] always enable reuseport feature");
-    if (g_options & OPT_ENABLE_TFO_ACCEPT) LOGINF("[main] enable tfo for tcp server socket");
-    if (g_options & OPT_ENABLE_TFO_CONNECT) LOGINF("[main] enable tfo for tcp client socket");
+    LOG_ALWAYS_INF("[main] server address: %s#%hu", g_server_ipstr, g_server_portno);
+    if (g_options & OPT_ENABLE_IPV4) LOG_ALWAYS_INF("[main] listen address: %s#%hu", g_bind_ipstr4, g_bind_portno);
+    if (g_options & OPT_ENABLE_IPV6) LOG_ALWAYS_INF("[main] listen address: %s#%hu", g_bind_ipstr6, g_bind_portno);
+    if (g_tcp_syncnt_max) LOG_ALWAYS_INF("[main] max number of syn retries: %hhu", g_tcp_syncnt_max);
+    LOG_ALWAYS_INF("[main] udp session cache capacity: %hu", lrucache_get_maxsize());
+    LOG_ALWAYS_INF("[main] udp session idle timeout: %hu", g_udp_idletimeout_sec);
+    LOG_ALWAYS_INF("[main] number of worker threads: %hhu", g_nthreads);
+    LOG_ALWAYS_INF("[main] max file descriptor limit: %zu", get_nofile_limit());
+    if (g_options & OPT_ENABLE_TCP) LOG_ALWAYS_INF("[main] enable tcp transparent proxy");
+    if (g_options & OPT_ENABLE_UDP) LOG_ALWAYS_INF("[main] enable udp transparent proxy");
+    if (g_options & OPT_TCP_USE_REDIRECT) LOG_ALWAYS_INF("[main] use redirect instead of tproxy");
+    if (g_options & OPT_ALWAYS_REUSE_PORT) LOG_ALWAYS_INF("[main] always enable reuseport feature");
+    if (g_options & OPT_ENABLE_TFO_ACCEPT) LOG_ALWAYS_INF("[main] enable tfo for tcp server socket");
+    if (g_options & OPT_ENABLE_TFO_CONNECT) LOG_ALWAYS_INF("[main] enable tfo for tcp client socket");
     if (g_options & OPT_ENABLE_FAKEDNS) {
-        LOGINF("[main] enable fakedns feature");
-        LOGINF("[main] fakedns listen address: %s#%hu", g_fakedns_ipstr, g_fakedns_portno);
+        LOG_ALWAYS_INF("[main] enable fakedns feature");
+        LOG_ALWAYS_INF("[main] fakedns listen address: %s#%hu", g_fakedns_ipstr, g_fakedns_portno);
         fakedns_init(g_fakedns_cidr);
         if (g_fakedns_cache_path[0]) {
-             LOGINF("[main] fakedns cache path: %s", g_fakedns_cache_path);
+             LOG_ALWAYS_INF("[main] fakedns cache path: %s", g_fakedns_cache_path);
              fakedns_load(g_fakedns_cache_path);
         }
     }
-    IF_VERBOSE LOGINF("[main] verbose mode (affect performance)");
+    LOGINF("[main] verbose mode (affect performance)");
 
     for (int i = 0; i < g_nthreads - 1; ++i) {
         if (pthread_create(&(pthread_t){0}, NULL, run_event_loop, NULL)) {
@@ -471,7 +471,7 @@ int main(int argc, char* argv[]) {
     }
     run_event_loop((void *)1);
 
-    IF_VERBOSE LOGINF("[main] exiting...");
+    LOG_ALWAYS_INF("[main] exiting...");
     if ((g_options & OPT_ENABLE_FAKEDNS) && g_fakedns_cache_path[0]) {
         fakedns_save(g_fakedns_cache_path);
     }
@@ -488,7 +488,7 @@ static void on_signal_read(evloop_t *loop, evio_t *watcher, int revents __attrib
     ssize_t s = read(watcher->fd, &fdsi, sizeof(struct signalfd_siginfo));
     if (s != sizeof(struct signalfd_siginfo)) return;
 
-    IF_VERBOSE LOGINF("[on_signal_read] caught signal %d, stopping...", fdsi.ssi_signo);
+    LOG_ALWAYS_INF("[on_signal_read] caught signal %d, stopping...", fdsi.ssi_signo);
     ev_break(loop, EVBREAK_ALL);
 }
 
@@ -634,12 +634,10 @@ static void tcp_tproxy_accept_cb(evloop_t *evloop, evio_t *accept_watcher, int r
         close(socks5_sockfd);
         return;
     }
-    IF_VERBOSE {
-        if (tfo_nsend >= 0) {
-            LOGINF("[tcp_tproxy_accept_cb] tfo send to %s#%hu, nsend:%zd", g_server_ipstr, g_server_portno, tfo_nsend);
-        } else {
-            LOGINF("[tcp_tproxy_accept_cb] try to connect to %s#%hu ...", g_server_ipstr, g_server_portno);
-        }
+    if (tfo_nsend >= 0) {
+        LOGINF("[tcp_tproxy_accept_cb] tfo send to %s#%hu, nsend:%zd", g_server_ipstr, g_server_portno, tfo_nsend);
+    } else {
+        LOGINF("[tcp_tproxy_accept_cb] try to connect to %s#%hu ...", g_server_ipstr, g_server_portno);
     }
 
     tcp_context_t *context = malloc(sizeof(*context));
@@ -721,7 +719,7 @@ static void tcp_socks5_connect_cb(evloop_t *evloop, evio_t *socks5_watcher, int 
         tcp_context_release(evloop, get_tcpctx_by_watcher(socks5_watcher), true);
         return;
     }
-    IF_VERBOSE LOGINF("[tcp_socks5_connect_cb] connect to %s#%hu succeeded", g_server_ipstr, g_server_portno);
+    LOGINF("[tcp_socks5_connect_cb] connect to %s#%hu succeeded", g_server_ipstr, g_server_portno);
     ev_set_cb(socks5_watcher, tcp_socks5_send_authreq_cb);
     ev_invoke(evloop, socks5_watcher, EV_WRITE);
 }
@@ -738,7 +736,7 @@ static int tcp_socks5_send_request(const char *funcname, evloop_t *evloop, evio_
         }
         return 0;
     }
-    IF_VERBOSE LOGINF("[%s] send to %s#%hu, nsend:%zd", funcname, g_server_ipstr, g_server_portno, nsend);
+    LOGINF("[%s] send to %s#%hu, nsend:%zd", funcname, g_server_ipstr, g_server_portno, nsend);
     context->socks5_length += (size_t)nsend;
     if (context->socks5_length >= datalen) {
         context->socks5_length = 0;
@@ -764,7 +762,7 @@ static int tcp_socks5_recv_response(const char *funcname, evloop_t *evloop, evio
         tcp_context_release(evloop, context, true);
         return -1;
     }
-    IF_VERBOSE LOGINF("[%s] recv from %s#%hu, nrecv:%zd", funcname, g_server_ipstr, g_server_portno, nrecv);
+    LOGINF("[%s] recv from %s#%hu, nrecv:%zd", funcname, g_server_ipstr, g_server_portno, nrecv);
     context->socks5_length += (size_t)nrecv;
     if (context->socks5_length >= datalen) {
         context->socks5_length = 0;
@@ -873,7 +871,7 @@ static void tcp_socks5_recv_proxyresp_cb(evloop_t *evloop, evio_t *socks5_watche
 
     ev_io_start(evloop, &context->client_watcher);
     ev_set_cb(socks5_watcher, tcp_stream_payload_forward_cb);
-    IF_VERBOSE LOGINF("[tcp_socks5_recv_proxyresp_cb] tunnel is ready, start forwarding ...");
+    LOGINF("[tcp_socks5_recv_proxyresp_cb] tunnel is ready, start forwarding ...");
 }
 
 static void tcp_stream_payload_forward_cb(evloop_t *evloop, evio_t *self_watcher, int revents) {
@@ -893,7 +891,7 @@ static void tcp_stream_payload_forward_cb(evloop_t *evloop, evio_t *self_watcher
             goto DO_WRITE; // EAGAIN
         }
         if (nrecv == 0) {
-            IF_VERBOSE LOGINF("[tcp_stream_payload_forward_cb] recv FIN from %s stream, release ctx", self_is_client ? "client" : "socks5");
+            LOGINF("[tcp_stream_payload_forward_cb] recv FIN from %s stream, release ctx", self_is_client ? "client" : "socks5");
             tcp_context_release(evloop, context, false);
             return;
         }
@@ -1003,12 +1001,10 @@ static void udp_tproxy_recvmsg_cb(evloop_t *evloop, evio_t *tprecv_watcher, int 
         uint32_t target_ip = ((skaddr4_t *)&skaddr)->sin_addr.s_addr;
         if (fakedns_reverse_lookup(target_ip, domain_buf, sizeof(domain_buf))) {
             fake_domain = domain_buf;
-            IF_VERBOSE {
-                LOGINF("[udp_tproxy_recvmsg_cb] fakedns hit: %u.%u.%u.%u -> %s",
-                       ((uint8_t *)&target_ip)[0], ((uint8_t *)&target_ip)[1],
-                       ((uint8_t *)&target_ip)[2], ((uint8_t *)&target_ip)[3],
-                       fake_domain);
-            }
+            LOGINF("[udp_tproxy_recvmsg_cb] fakedns hit: %u.%u.%u.%u -> %s",
+                   ((uint8_t *)&target_ip)[0], ((uint8_t *)&target_ip)[1],
+                   ((uint8_t *)&target_ip)[2], ((uint8_t *)&target_ip)[3],
+                   fake_domain);
         }
     }
 
@@ -1082,7 +1078,7 @@ static void udp_tproxy_recvmsg_cb(evloop_t *evloop, evio_t *tprecv_watcher, int 
                 } else {
                     /* Collision detected! Client reusing port for diff Target. Force Fork. */
                     force_fork = true;
-                    IF_VERBOSE LOGINF("[udp_tproxy_recvmsg_cb] collision detected for %s, forcing fork", fake_domain);
+                    LOGINF("[udp_tproxy_recvmsg_cb] collision detected for %s, forcing fork", fake_domain);
                 }
             }
         }
@@ -1101,12 +1097,10 @@ static void udp_tproxy_recvmsg_cb(evloop_t *evloop, evio_t *tprecv_watcher, int 
             close(tcp_sockfd);
             return;
         }
-        IF_VERBOSE {
-            if (tfo_nsend >= 0) {
-                LOGINF("[udp_tproxy_recvmsg_cb] tfo send to %s#%hu, nsend:%zd", g_server_ipstr, g_server_portno, tfo_nsend);
-            } else {
-                LOGINF("[udp_tproxy_recvmsg_cb] try to connect to %s#%hu ...", g_server_ipstr, g_server_portno);
-            }
+        if (tfo_nsend >= 0) {
+            LOGINF("[udp_tproxy_recvmsg_cb] tfo send to %s#%hu, nsend:%zd", g_server_ipstr, g_server_portno, tfo_nsend);
+        } else {
+            LOGINF("[udp_tproxy_recvmsg_cb] try to connect to %s#%hu ...", g_server_ipstr, g_server_portno);
         }
 
         context = malloc(sizeof(*context));
@@ -1171,11 +1165,11 @@ static void udp_tproxy_recvmsg_cb(evloop_t *evloop, evio_t *tprecv_watcher, int 
         udp_packet_queue_t *queue = context->udp_watcher.data;
         
         if (queue->count >= UDP_QUEUE_MAX_DEPTH) {
-            IF_VERBOSE LOGWAR("[udp_tproxy_recvmsg_cb] packet queue full (%zu), dropping this msg", queue->count);
+            LOGWAR("[udp_tproxy_recvmsg_cb] packet queue full (%zu), dropping this msg", queue->count);
             return;
         }
 
-        IF_VERBOSE LOGINF("[udp_tproxy_recvmsg_cb] tunnel is not ready, buffering this msg (queue: %zu)", queue->count);
+        LOGINF("[udp_tproxy_recvmsg_cb] tunnel is not ready, buffering this msg (queue: %zu)", queue->count);
         
         udp_packet_node_t *node = malloc(sizeof(udp_packet_node_t) + headerlen + nrecv);
         node->next = NULL;
@@ -1202,14 +1196,12 @@ static void udp_tproxy_recvmsg_cb(evloop_t *evloop, evio_t *tprecv_watcher, int 
         LOGERR("[udp_tproxy_recvmsg_cb] send to %s#%hu: %s", ipstr, portno, strerror(errno));
         return;
     }
-    IF_VERBOSE {
-        if (fake_domain) {
-            portno = ntohs(((skaddr4_t *)&skaddr)->sin_port);
-            LOGINF("[udp_tproxy_recvmsg_cb] send to %s#%hu, nsend:%zd", fake_domain, portno, nrecv);
-        } else {
-            parse_socket_addr(&skaddr, ipstr, &portno);
-            LOGINF("[udp_tproxy_recvmsg_cb] send to %s#%hu, nsend:%zd", ipstr, portno, nrecv);
-        }
+    if (fake_domain) {
+        portno = ntohs(((skaddr4_t *)&skaddr)->sin_port);
+        LOGINF("[udp_tproxy_recvmsg_cb] send to %s#%hu, nsend:%zd", fake_domain, portno, nrecv);
+    } else {
+        parse_socket_addr(&skaddr, ipstr, &portno);
+        LOGINF("[udp_tproxy_recvmsg_cb] send to %s#%hu, nsend:%zd", ipstr, portno, nrecv);
     }
 }
 
@@ -1227,7 +1219,7 @@ static void udp_socks5_connect_cb(evloop_t *evloop, evio_t *tcp_watcher, int rev
         udp_socks5ctx_release(evloop, get_udpsk5ctx_by_tcp(tcp_watcher));
         return;
     }
-    IF_VERBOSE LOGINF("[udp_socks5_connect_cb] connect to %s#%hu succeeded", g_server_ipstr, g_server_portno);
+    LOGINF("[udp_socks5_connect_cb] connect to %s#%hu succeeded", g_server_ipstr, g_server_portno);
     ev_set_cb(tcp_watcher, udp_socks5_send_authreq_cb);
     ev_invoke(evloop, tcp_watcher, EV_WRITE);
 }
@@ -1244,7 +1236,7 @@ static int udp_socks5_send_request(const char *funcname, evloop_t *evloop, evio_
         }
         return 0;
     }
-    IF_VERBOSE LOGINF("[%s] send to %s#%hu, nsend:%zd", funcname, g_server_ipstr, g_server_portno, n);
+    LOGINF("[%s] send to %s#%hu, nsend:%zd", funcname, g_server_ipstr, g_server_portno, n);
     *nsend += (size_t)n;
     if (*nsend >= datalen) {
         *nsend = 0;
@@ -1270,7 +1262,7 @@ static int udp_socks5_recv_response(const char *funcname, evloop_t *evloop, evio
         udp_socks5ctx_release(evloop, get_udpsk5ctx_by_tcp(tcp_watcher));
         return -1;
     }
-    IF_VERBOSE LOGINF("[%s] recv from %s#%hu, nrecv:%zd", funcname, g_server_ipstr, g_server_portno, n);
+    LOGINF("[%s] recv from %s#%hu, nrecv:%zd", funcname, g_server_ipstr, g_server_portno, n);
     *nrecv += (size_t)n;
     if (*nrecv >= datalen) {
         *nrecv = 0;
@@ -1466,7 +1458,7 @@ static void udp_socks5_recv_tcpmessage_cb(evloop_t *evloop, evio_t *tcp_watcher,
         LOGERR("[udp_socks5_recv_tcpmessage_cb] recv unknown msg from socks5 server, release ctx");
         udp_socks5ctx_release(evloop, get_udpsk5ctx_by_tcp(tcp_watcher));
     } else if (nrecv == 0) {
-        IF_VERBOSE LOGINF("[udp_socks5_recv_tcpmessage_cb] recv FIN from socks5 server, release ctx");
+        LOGINF("[udp_socks5_recv_tcpmessage_cb] recv FIN from socks5 server, release ctx");
         udp_socks5ctx_release(evloop, get_udpsk5ctx_by_tcp(tcp_watcher));
     } else if (errno != EAGAIN && errno != EWOULDBLOCK) {
         LOGERR("[udp_socks5_recv_tcpmessage_cb] recv from socks5 server: %s", strerror(errno));
@@ -1518,12 +1510,10 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, evio_t *udp_watcher,
             LOGERR("[udp_socks5_recv_udpmessage_cb] recv from socks5 server: domain message truncated");
             return;
         }
-        IF_VERBOSE {
-            char domain_buf[256];
-            memcpy(domain_buf, (uint8_t *)g_udp_dgram_buffer + 5, domain_len);
-            domain_buf[domain_len] = '\0';
-            LOGINF("[udp_socks5_recv_udpmessage_cb] recv domain response: %s, nrecv:%zd", domain_buf, nrecv);
-        }
+        char domain_buf[256];
+        memcpy(domain_buf, (uint8_t *)g_udp_dgram_buffer + 5, domain_len);
+        domain_buf[domain_len] = '\0';
+        LOGINF("[udp_socks5_recv_udpmessage_cb] recv domain response: %s, nrecv:%zd", domain_buf, nrecv);
     } else {
         LOGERR("[udp_socks5_recv_udpmessage_cb] unsupported address type: 0x%02x", udp4msg->addrtype);
         return;
@@ -1662,14 +1652,12 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, evio_t *udp_watcher,
         LOGERR("[udp_socks5_recv_udpmessage_cb] send to %s#%hu: %s", ipstr, portno, strerror(errno));
         return;
     }
-    IF_VERBOSE {
-        parse_socket_addr(&toskaddr, ipstr, &portno);
-        LOGINF("[udp_socks5_recv_udpmessage_cb] send to %s#%hu, nsend:%zd", ipstr, portno, nrecv);
-    }
+    parse_socket_addr(&toskaddr, ipstr, &portno);
+    LOGINF("[udp_socks5_recv_udpmessage_cb] send to %s#%hu, nsend:%zd", ipstr, portno, nrecv);
 }
 
 static void udp_socks5_context_timeout_cb(evloop_t *evloop, evtimer_t *idle_timer, int revents) {
-    IF_VERBOSE LOGINF("[udp_socks5_context_timeout_cb] context will be released, reason: %s", revents & EV_CUSTOM ? "manual" : "timeout");
+    LOGINF("[udp_socks5_context_timeout_cb] context will be released, reason: %s", revents & EV_CUSTOM ? "manual" : "timeout");
 
     udp_socks5ctx_t *context = (void *)idle_timer - offsetof(udp_socks5ctx_t, idle_timer);
     if (context->is_forked) {
@@ -1703,7 +1691,7 @@ static void udp_socks5_context_timeout_cb(evloop_t *evloop, evtimer_t *idle_time
 }
 
 static void udp_tproxy_context_timeout_cb(evloop_t *evloop, evtimer_t *idle_timer, int revents) {
-    IF_VERBOSE LOGINF("[udp_tproxy_context_timeout_cb] context will be released, reason: %s", revents & EV_CUSTOM ? "manual" : "timeout");
+    LOGINF("[udp_tproxy_context_timeout_cb] context will be released, reason: %s", revents & EV_CUSTOM ? "manual" : "timeout");
 
     udp_tproxyctx_t *context = (void *)idle_timer - offsetof(udp_tproxyctx_t, idle_timer);
     udp_tproxyctx_del(&g_udp_tproxyctx_table, context);
