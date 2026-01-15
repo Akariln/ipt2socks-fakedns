@@ -63,7 +63,7 @@ jobs:
       - name: Build with Docker
         run: |
           docker run --rm -v "$(pwd):/src" -w /src muslcc/x86_64:${{ matrix.target }} \
-            /bin/sh -c "/bin/gcc -std=c99 -Wall -Wextra -Wvla -pthread -O3 -flto -fno-strict-aliasing -ffunction-sections -fdata-sections -DNDEBUG ${{ matrix.cflags }} -pthread -O3 -flto -fno-strict-aliasing -Wl,--gc-sections -s -o ipt2socks src/ipt2socks.c src/lrucache.c src/netutils.c src/protocol.c libev/ev.c src/fakedns.c src/xxhash.c -lm"
+            /bin/sh -c "/bin/gcc -std=c99 -Wall -Wextra -Wvla -pthread -O3 -flto -fno-strict-aliasing -ffunction-sections -fdata-sections -DNDEBUG ${{ matrix.cflags }} -pthread -O3 -flto -fno-strict-aliasing -Wl,--gc-sections -s -o ipt2socks src/ipt2socks.c src/lrucache.c src/netutils.c src/protocol.c libev/ev.c src/fakedns.c src/xxhash.c src/logutils.c src/mempool.c -lm"
 
           # Fix ownership
           sudo chown -R $USER:$USER .
