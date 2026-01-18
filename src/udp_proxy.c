@@ -736,6 +736,11 @@ static void handle_udp_socks5_response(evloop_t *evloop, udp_socks5ctx_t *socks5
             return;
         }
         tproxyctx = malloc(sizeof(*tproxyctx));
+        if (!tproxyctx) {
+             LOGERR("[udp_socks5_recv_udpmessage_cb] malloc failed for tproxyctx");
+             close(tproxy_sockfd);
+             return;
+        }
         memcpy(&tproxyctx->key_ipport, &fromipport, sizeof(fromipport));
         tproxyctx->udp_sockfd = tproxy_sockfd;
         evtimer_t *timer = &tproxyctx->idle_timer;
