@@ -113,6 +113,13 @@ void tcp_tproxy_accept_cb(evloop_t *evloop, evio_t *accept_watcher, int revents 
     }
 
     tcp_context_t *context = malloc(sizeof(*context));
+    if (!context) {
+        LOGERR("[tcp_tproxy_accept_cb] malloc failed");
+        tcp_close_by_rst(client_sockfd);
+        close(socks5_sockfd);
+        return;
+    }
+    memset(context, 0, sizeof(*context));
 
     /* if (watcher->events & EV_CUSTOM); then it is client watcher; fi */
     evio_t *watcher = &context->client_watcher;

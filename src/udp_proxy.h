@@ -30,5 +30,6 @@ typedef struct {
 
 void udp_tproxy_recvmsg_cb(evloop_t *evloop, evio_t *watcher, int revents);
 void udp_dns_recv_cb(evloop_t *evloop, evio_t *watcher, int revents);
+void udp_proxy_close_all_sessions(evloop_t *evloop);
 
 #endif

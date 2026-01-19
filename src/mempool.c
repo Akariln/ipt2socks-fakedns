@@ -3,9 +3,7 @@
 #include "logutils.h"
 #include <stdlib.h>
 #include <string.h>
-
-/* Memory pool configuration */
-#define POOL_MAX_SIZE 2048  /* Maximum blocks per pool (4MB at 2KB/block) */
+#include <stdint.h>
 
 /* Memory pool structure */
 struct memory_pool {
@@ -13,6 +11,7 @@ struct memory_pool {
     size_t block_size;     /* Size of each block */
     size_t total_blocks;   /* Total number of blocks allocated */
     size_t free_blocks;    /* Number of available blocks */
+    size_t max_blocks;     /* Maximum blocks allowed */
     size_t alloc_count;    /* Total allocations from pool */
     size_t free_count;     /* Total frees to pool */
     size_t bypass_allocs;  /* Large allocations bypassed to malloc */
@@ -20,7 +19,7 @@ struct memory_pool {
 };
 
 /* Create memory pool */
-memory_pool_t* mempool_create(size_t block_size, size_t initial_blocks) {
+memory_pool_t* mempool_create(size_t block_size, size_t initial_blocks, size_t max_blocks) {
     memory_pool_t *pool = malloc(sizeof(memory_pool_t));
     if (!pool) {
         LOGERR("[mempool] failed to allocate pool structure");
@@ -28,6 +27,7 @@ memory_pool_t* mempool_create(size_t block_size, size_t initial_blocks) {
     }
     
     pool->block_size = block_size;
+    pool->max_blocks = (max_blocks == 0) ? SIZE_MAX : max_blocks;  /* 0 = unlimited */
     pool->total_blocks = 0;
     pool->free_blocks = 0;
     pool->free_list = NULL;
@@ -51,8 +51,9 @@ memory_pool_t* mempool_create(size_t block_size, size_t initial_blocks) {
         pool->free_blocks++;
     }
     
-    LOG_ALWAYS_INF("[mempool] created: block_size=%zu, initial_blocks=%zu, memory=%zu KB", 
-           block_size, pool->total_blocks, (block_size * pool->total_blocks) / 1024);
+    LOG_ALWAYS_INF("[mempool] created: block_size=%zu, initial=%zu, max=%zu, memory=%zu KB", 
+           block_size, pool->total_blocks, pool->max_blocks,
+           (block_size * pool->total_blocks) / 1024);
     return pool;
 }
 
@@ -63,8 +64,6 @@ void* mempool_alloc_sized(memory_pool_t *pool, size_t size) {
     /* Large packet bypass: direct malloc */
     if (size > pool->block_size) {
         pool->bypass_allocs++;
-        LOGINF("[mempool] large packet %zu bytes, bypass to malloc (total: %zu)", 
-               size, pool->bypass_allocs);
         return malloc(size);
     }
     
@@ -77,21 +76,20 @@ void* mempool_alloc_sized(memory_pool_t *pool, size_t size) {
         pool->free_blocks--;
     } else {
         /* Free list empty, try dynamic expansion */
-        if (pool->total_blocks < POOL_MAX_SIZE) {
+        if (pool->total_blocks < pool->max_blocks) {
             block = malloc(pool->block_size);
             if (block) {
                 pool->total_blocks++;
-                LOGINF("[mempool] expanded: total_blocks=%zu", pool->total_blocks);
+                LOGINF("[mempool] expanded: %zu/%zu", pool->total_blocks, pool->max_blocks);
             } else {
                 LOGERR("[mempool] malloc failed during expansion");
                 return NULL;
             }
         } else {
-            /* Pool exhausted, fallback to malloc */
-            LOGWAR("[mempool] pool limit reached (%zu blocks), fallback to malloc", 
+            /* Pool exhausted, return NULL (caller handles this) */
+            LOGWAR("[mempool] pool limit reached (%zu blocks), allocation failed", 
                    pool->total_blocks);
-            pool->bypass_allocs++;
-            return malloc(size);
+            return NULL;
         }
     }
     
@@ -118,12 +116,22 @@ void mempool_free_sized(memory_pool_t *pool, void *block, size_t size) {
 }
 
 /* Destroy memory pool */
-void mempool_destroy(memory_pool_t *pool) {
-    if (!pool) return;
+size_t mempool_destroy(memory_pool_t *pool) {
+    if (!pool) return 0;
     
-    LOG_ALWAYS_INF("[mempool] destroy: total=%zu, free=%zu, alloc=%zu, free_ops=%zu, bypass_alloc=%zu, bypass_free=%zu", 
-           pool->total_blocks, pool->free_blocks, pool->alloc_count, 
-           pool->free_count, pool->bypass_allocs, pool->bypass_frees);
+    /* Calculate leaks */
+    size_t pool_leaks = pool->alloc_count - pool->free_count;
+    size_t bypass_leaks = pool->bypass_allocs - pool->bypass_frees;
+    size_t total_leaks = pool_leaks + bypass_leaks;
+    
+    LOG_ALWAYS_INF("[mempool] destroy: total=%zu/%zu, free=%zu, alloc=%zu, free_ops=%zu, bypass_alloc=%zu, bypass_free=%zu, leaks=%zu", 
+           pool->total_blocks, pool->max_blocks, pool->free_blocks, 
+           pool->alloc_count, pool->free_count, 
+           pool->bypass_allocs, pool->bypass_frees, total_leaks);
+    
+    if (total_leaks > 0) {
+        LOGWAR("[mempool] detected leaks: pool=%zu, bypass=%zu", pool_leaks, bypass_leaks);
+    }
     
     /* Free all blocks in free list */
     void *curr = pool->free_list;
@@ -139,13 +147,8 @@ void mempool_destroy(memory_pool_t *pool) {
         LOGWAR("[mempool] freed %zu blocks but free_blocks was %zu", freed, pool->free_blocks);
     }
     
-    /* Check for memory leaks */
-    size_t outstanding = pool->alloc_count - pool->free_count;
-    if (outstanding > 0) {
-        LOGWAR("[mempool] potential leak: %zu blocks not freed", outstanding);
-    }
-    
     free(pool);
+    return total_leaks;
 }
 
 /* Get statistics */

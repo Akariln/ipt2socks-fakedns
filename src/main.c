@@ -408,10 +408,34 @@ static void on_signal_read(evloop_t *loop, evio_t *watcher, int revents __attrib
 static void* run_event_loop(void *is_main_thread) {
     evloop_t *evloop = ev_loop_new(0); // Restore original helper, we don't need default loop for ev_io
 
-    /* Initialize UDP packet memory pool (thread-local) */
-    g_udp_packet_pool = mempool_create(MEMPOOL_BLOCK_SIZE, MEMPOOL_INITIAL_SIZE);
+    /* Initialize UDP memory pools (thread-local) */
+    /* Use user-specified cache size as initial reference to avoid immediate resize */
+    size_t cache_size = lrucache_get_maxsize();
+    size_t initial_blocks = cache_size;
+    
+    /* Ensure minimum size */
+    if (initial_blocks < MEMPOOL_INITIAL_SIZE) initial_blocks = MEMPOOL_INITIAL_SIZE;
+    
+    /* 1. Packet Pool (variable-sized, high limit for throughput) */
+    g_udp_packet_pool = mempool_create(
+        MEMPOOL_BLOCK_SIZE, 
+        initial_blocks, 
+        65536 /* max blocks: 128MB */
+    );
     if (!g_udp_packet_pool) {
-        LOGERR("[run_event_loop] failed to create memory pool");
+        LOGERR("[run_event_loop] failed to create packet memory pool");
+        exit(1);
+    }
+
+    /* 2. Context Pool (fixed-size, limit proportional to cache size) */
+    /* Allow 2x burst over cache size */
+    g_udp_context_pool = mempool_create(
+        sizeof(udp_socks5ctx_t), 
+        initial_blocks, 
+        initial_blocks * 2
+    );
+    if (!g_udp_context_pool) {
+        LOGERR("[run_event_loop] failed to create context memory pool");
         exit(1);
     }
 
@@ -518,8 +542,19 @@ static void* run_event_loop(void *is_main_thread) {
 
     ev_run(evloop, 0);
     
-    /* Destroy memory pool before thread exits */
-    mempool_destroy(g_udp_packet_pool);
+    /* Clean up all active UDP sessions to ensure memory is released to pools */
+    if (g_options & OPT_ENABLE_UDP) {
+        udp_proxy_close_all_sessions(evloop);
+    }
+    
+    /* Destroy memory pools and check for leaks */
+    size_t pkt_leaks = mempool_destroy(g_udp_packet_pool);
+    size_t ctx_leaks = mempool_destroy(g_udp_context_pool);
+    
+    if (pkt_leaks > 0 || ctx_leaks > 0) {
+        LOGERR("[run_event_loop] memory leaks detected: packet_pool=%zu, context_pool=%zu", 
+               pkt_leaks, ctx_leaks);
+    }
     
     return NULL;
 }

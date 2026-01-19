@@ -10,11 +10,15 @@ typedef struct memory_pool memory_pool_t;
 
 /**
  * Create a memory pool with fixed block size
+ * 
+ * THREAD-SAFETY: NOT thread-safe. Use __thread pools in multi-threaded code.
+ * 
  * @param block_size Size of each block in bytes
  * @param initial_blocks Number of blocks to pre-allocate
+ * @param max_blocks Maximum blocks allowed (0 = unlimited)
  * @return Pointer to created pool, or NULL on failure
  */
-memory_pool_t* mempool_create(size_t block_size, size_t initial_blocks);
+memory_pool_t* mempool_create(size_t block_size, size_t initial_blocks, size_t max_blocks);
 
 /**
  * Allocate memory from pool with size awareness
@@ -39,8 +43,9 @@ void mempool_free_sized(memory_pool_t *pool, void *block, size_t size);
 /**
  * Destroy memory pool and free all resources
  * @param pool Memory pool to destroy
+ * @return Number of leaked allocations (pool + bypass)
  */
-void mempool_destroy(memory_pool_t *pool);
+size_t mempool_destroy(memory_pool_t *pool);
 
 /**
  * Get pool statistics (for monitoring)

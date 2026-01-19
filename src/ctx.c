@@ -22,6 +22,7 @@ __thread udp_socks5ctx_t *g_udp_fork_table               = NULL; // Fork table
 __thread udp_tproxyctx_t *g_udp_tproxyctx_table          = NULL;
 __thread char    g_udp_batch_buffer[UDP_BATCH_SIZE][UDP_DATAGRAM_MAXSIZ];
 __thread memory_pool_t *g_udp_packet_pool                = NULL;
+__thread memory_pool_t *g_udp_context_pool               = NULL;
 
 char      g_fakedns_ipstr[IP4STRLEN] = "127.0.0.1";
 portno_t  g_fakedns_portno           = 5353;

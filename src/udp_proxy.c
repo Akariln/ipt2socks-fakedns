@@ -248,7 +248,13 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
             LOGINF("[udp_tproxy_recvmsg_cb] try to connect to %s#%hu ...", g_server_ipstr, g_server_portno);
         }
 
-        context = malloc(sizeof(*context));
+        context = mempool_alloc_sized(g_udp_context_pool, sizeof(*context));
+        if (!context) {
+            LOGERR("[udp_tproxy_recvmsg_cb] mempool alloc failed for context");
+            close(tcp_sockfd);
+            return;
+        }
+        memset(context, 0, sizeof(*context));
         memcpy(&context->key_ipport, &key_ipport, sizeof(key_ipport));
 
         // Save original destination and protocol family
@@ -282,7 +288,7 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
             ev_io_stop(evloop, watcher);
             close(tcp_sockfd);
             free(context->tcp_watcher.data);
-            free(context);
+            mempool_free_sized(g_udp_context_pool, context, sizeof(*context));
             return;
         }
         node->next = NULL;
@@ -290,6 +296,16 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
         memcpy(node->data, header_start, actual_headerlen + nrecv);
         
         udp_packet_queue_t *queue = malloc(sizeof(udp_packet_queue_t));
+        if (!queue) {
+            LOGERR("[udp_tproxy_recvmsg_cb] malloc failed for packet queue");
+            mempool_free_sized(g_udp_packet_pool, node, node_size);
+            ev_io_stop(evloop, watcher);
+            close(tcp_sockfd);
+            free(context->tcp_watcher.data);
+            free(context->tcp_watcher.data);
+            mempool_free_sized(g_udp_context_pool, context, sizeof(*context));
+            return;
+        }
         queue->head = node;
         queue->tail = node;
         queue->count = 1;
@@ -760,6 +776,7 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, evio_t *udp_watcher,
                 fromipport.port = udp6msg->portnum;
                 dest_isipv4 = false;
             } else {
+                LOGWAR("[udp_socks5_recv_udpmessage_cb] DOMAIN response without FakeDNS, dropping packet");
                 continue;  /* Domain without FakeDNS */
             }
         }
@@ -955,7 +972,7 @@ static void udp_socks5_context_timeout_cb(evloop_t *evloop, evtimer_t *idle_time
         close(context->udp_watcher.fd);
     }
 
-    free(context);
+    mempool_free_sized(g_udp_context_pool, context, sizeof(*context));
 }
 
 static void udp_tproxy_context_timeout_cb(evloop_t *evloop, evtimer_t *idle_timer, int revents) {
@@ -990,5 +1007,27 @@ void udp_dns_recv_cb(evloop_t *evloop, evio_t *watcher, int revents) {
                 LOGERR("[udp_dns_recv_cb] sendto: %s", strerror(errno));
             }
         }
+    }
+}
+
+void udp_proxy_close_all_sessions(evloop_t *evloop) {
+    udp_socks5ctx_t *ctx, *tmp;
+    udp_tproxyctx_t *tctx, *ttmp;
+
+    LOGINF("[udp_proxy_close_all_sessions] cleaning up remaining sessions...");
+
+    /* Clean UDP SOCKS5 Main Table */
+    HASH_ITER(hh, g_udp_socks5ctx_table, ctx, tmp) {
+        udp_socks5_context_timeout_cb(evloop, &ctx->idle_timer, EV_CUSTOM);
+    }
+
+    /* Clean UDP SOCKS5 Fork Table */
+    HASH_ITER(hh, g_udp_fork_table, ctx, tmp) {
+        udp_socks5_context_timeout_cb(evloop, &ctx->idle_timer, EV_CUSTOM);
+    }
+    
+    /* Clean UDP TProxy Table */
+    HASH_ITER(hh, g_udp_tproxyctx_table, tctx, ttmp) {
+        udp_tproxy_context_timeout_cb(evloop, &tctx->idle_timer, EV_CUSTOM);
     }
 }
