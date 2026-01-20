@@ -17,6 +17,7 @@ typedef struct {
     ip_port_t  orig_dstaddr; // Original destination address (FakeIP or real IP)
     bool       dest_is_ipv4; // Protocol family flag for orig_dstaddr
     bool       is_forked;    // Is this session in the Fork Table?
+    bool       is_fakedns;   // Is this a FakeDNS session?
     evio_t     tcp_watcher; // .data: len(16bit) | recvbuff
     evio_t     udp_watcher; // .data: len(16bit) | firstmsg
     evtimer_t  idle_timer;

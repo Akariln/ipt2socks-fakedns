@@ -197,31 +197,65 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
 
     /* Step 1: Check Fork Table (precise match: client + target) */
     context = udp_socks5ctx_fork_get(&g_udp_fork_table, &fork_key);
+    
+    if (context) {
+        IF_VERBOSE {
+            LOGINF("[udp_tproxy_recvmsg_cb] reuse fork context: %s -> %s", ipstr, fake_domain ? fake_domain : "RealIP");
+        }
+    }
 
     if (!context) {
         /* Step 2: Check Main Table (fast path: first target from client) */
         udp_socks5ctx_t *main_ctx = udp_socks5ctx_get(&g_udp_socks5ctx_table, &key_ipport);
         
         if (main_ctx) {
-            /* Step 3: Check if target matches */
-            bool target_matches = false;
+            /* Step 3: Check collision
+             * Conditions for reuse:
+             * 1. Protocol family matches (already checked above)
+             * 2. Type matches (FakeDNS vs Real IP)
+             * 3. IF FakeDNS: Target must match exactly (Symmetric NAT requirement for spoofing)
+             * 4. IF Real IP: Target can differ (Full Cone NAT allowed)
+             */
+            bool req_is_fakedns = (fake_domain != NULL);
             
-            // First check protocol family
-            if (main_ctx->dest_is_ipv4 == isipv4) {
+            if (main_ctx->dest_is_ipv4 != isipv4) {
+                // Protocol family mismatch -> Conflict
+                force_fork = true;
+            } else if (main_ctx->is_fakedns != req_is_fakedns) {
+                // Type mismatch (FakeDNS vs Real IP) -> Conflict
+                force_fork = true;
+            } else if (main_ctx->is_fakedns) {
+                // FakeDNS Mode: Must match target exactly for spoofing
+                bool target_matches;
                 if (isipv4) {
                     target_matches = (main_ctx->orig_dstaddr.ip.ip4 == fork_key.target_ip.ip4);
                 } else {
                     target_matches = (memcmp(&main_ctx->orig_dstaddr.ip.ip6,
                                             &fork_key.target_ip.ip6, IP6BINLEN) == 0);
                 }
-            }
-            
-            if (target_matches) {
-                /* Target matches - safe to reuse Main Table association */
-                context = main_ctx;
+                
+                if (!target_matches) {
+                    force_fork = true;
+                }
             } else {
-                /* Target differs - collision detected, must fork */
-                force_fork = true;
+                // Real IP Mode: Allow reuse for different targets (Full Cone NAT)
+                // No force_fork needed.
+            }
+
+            if (!force_fork) {
+                /* Target matches or allowed to differ - safe to reuse Main Table association */
+                context = main_ctx;
+                IF_VERBOSE {
+                    if (fake_domain) {
+                        LOGINF("[udp_tproxy_recvmsg_cb] reuse main context (FakeDNS): %s -> %s", ipstr, fake_domain);
+                    } else {
+                        char target_ipstr[IP6STRLEN]; portno_t target_port;
+                        parse_socket_addr(&skaddr, target_ipstr, &target_port);
+                        LOGINF("[udp_tproxy_recvmsg_cb] reuse main context (RealIP): %s -> %s#%d", ipstr, target_ipstr, target_port);
+                    }
+                }
+            } else {
+                /* Collision detected, must fork */
                 if (fake_domain) {
                     LOGINF("[udp_tproxy_recvmsg_cb] collision detected for %s, forcing fork", fake_domain);
                 } else {
@@ -259,6 +293,7 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
 
         // Save original destination and protocol family
         context->dest_is_ipv4 = isipv4;
+        context->is_fakedns = (fake_domain != NULL);
         if (isipv4) {
             context->orig_dstaddr.ip.ip4 = ((skaddr4_t *)&skaddr)->sin_addr.s_addr;
             context->orig_dstaddr.port = ((skaddr4_t *)&skaddr)->sin_port;
@@ -330,10 +365,19 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
         if (force_fork) {
             context->is_forked = true;
             del_context = udp_socks5ctx_fork_add(&g_udp_fork_table, context);
+            IF_VERBOSE {
+                LOGINF("[udp_tproxy_recvmsg_cb] new fork context created");
+            }
         } else {
+
+            IF_VERBOSE {
+                 LOGINF("[udp_tproxy_recvmsg_cb] new main context created");
+            }
+
             context->is_forked = false;
             del_context = udp_socks5ctx_add(&g_udp_socks5ctx_table, context);
         }
+
 
         if (del_context) ev_invoke(evloop, &del_context->idle_timer, EV_CUSTOM);
         return;
@@ -762,7 +806,7 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, evio_t *udp_watcher,
         ip_port_t fromipport;
         bool dest_isipv4;
         
-        if (g_options & OPT_ENABLE_FAKEDNS) {
+        if (socks5ctx->is_fakedns) {
             fromipport = socks5ctx->orig_dstaddr;
             dest_isipv4 = socks5ctx->dest_is_ipv4;
         } else {
