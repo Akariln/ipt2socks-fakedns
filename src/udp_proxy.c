@@ -904,7 +904,7 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, evio_t *udp_watcher,
                         /* Swap using memcpy for C99 compatibility */
                         char tmpbuf[sizeof(batch_sends[0])];
                         memcpy(tmpbuf, &batch_sends[i + group_count], sizeof(batch_sends[0]));
-                        batch_sends[i + group_count] = batch_sends[j];
+                        memcpy(&batch_sends[i + group_count], &batch_sends[j], sizeof(batch_sends[0]));
                         memcpy(&batch_sends[j], tmpbuf, sizeof(batch_sends[0]));
                     }
                     group_count++;
@@ -912,58 +912,53 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, evio_t *udp_watcher,
             }
             
             /* Send batch for this socket */
-            struct mmsghdr *group_msgs = malloc(sizeof(struct mmsghdr) * group_count);
-            if (group_msgs) {
-                for (int k = 0; k < group_count; k++) {
-                    group_msgs[k] = batch_sends[group_start + k].msg;
-                }
-                
-                int sent = sendmmsg(ctx->udp_sockfd, group_msgs, group_count, 0);
-                if (sent < 0) {
-                    LOGERR("[udp_socks5_recv_udpmessage_cb] sendmmsg failed: %s", strerror(errno));
-                } else {
-                #ifdef ENABLE_SENDTO_LOG
-                    char ipstr[IP6STRLEN];
-                    ip_port_t *client = &socks5ctx->key_ipport;
-                    /* Use dest protocol family as heuristic (client usually matches target) */
-                    if (socks5ctx->dest_is_ipv4) {
-                        inet_ntop(AF_INET, &client->ip.ip4, ipstr, sizeof(ipstr));
-                    } else {
-                        inet_ntop(AF_INET6, &client->ip.ip6, ipstr, sizeof(ipstr));
-                    }
-                    LOGINF("[udp_socks5_recv_udpmessage_cb] sendmmsg to %s#%hu: %d packets sent", 
-                           ipstr, ntohs(client->port), sent);
-                #endif
-                    if (sent < group_count) {
-                        /* Fallback for unsent */
-                        LOGWAR("[udp_socks5_recv_udpmessage_cb] partial send %d/%d, using fallback", sent, group_count);
-                        for (int k = sent; k < group_count; k++) {
-                            struct msghdr *hdr = &group_msgs[k].msg_hdr;
-                            ssize_t n = sendto(ctx->udp_sockfd, hdr->msg_iov[0].iov_base, 
-                                   hdr->msg_iov[0].iov_len, 0, hdr->msg_name, hdr->msg_namelen);
-                            #ifdef ENABLE_SENDTO_LOG
-                            if (n > 0) {
-                                char ipstr[IP6STRLEN]; portno_t portno;
-                                parse_socket_addr((skaddr6_t *)hdr->msg_name, ipstr, &portno);
-                                LOGINF("[udp_socks5_recv_udpmessage_cb] fallback sendto %s#%hu, nsend:%zd", ipstr, portno, n);
-                            }
-                            #endif
-                            if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
-                                LOGERR("[udp_socks5_recv_udpmessage_cb] fallback sendto failed: %s", strerror(errno));
-                            }
-                        }
-                    }
-                }
-                free(group_msgs);
+            struct mmsghdr group_msgs[UDP_BATCH_SIZE];
+            
+            for (int k = 0; k < group_count; k++) {
+                group_msgs[k] = batch_sends[group_start + k].msg;
+                /* 
+                 * CRITICAL FIX: Update pointers after sorting.
+                 * batch_sends elements were swapped, so the internal pointers (msg_name, msg_iov)
+                 * in 'msg' still point to the OLD locations (which now hold different data).
+                 * We must re-point them to the current location.
+                 */
+                group_msgs[k].msg_hdr.msg_name = &batch_sends[group_start + k].addr;
+                group_msgs[k].msg_hdr.msg_iov = &batch_sends[group_start + k].iov;
+            }
+            
+            int sent = sendmmsg(ctx->udp_sockfd, group_msgs, group_count, 0);
+            if (sent < 0) {
+                LOGERR("[udp_socks5_recv_udpmessage_cb] sendmmsg failed: %s", strerror(errno));
             } else {
-                /* malloc failed - fallback to individual sends */
-                LOGWAR("[udp_socks5_recv_udpmessage_cb] malloc failed, using individual sends for %d packets", group_count);
-                for (int k = 0; k < group_count; k++) {
-                    struct msghdr *hdr = &batch_sends[group_start + k].msg.msg_hdr;
-                    ssize_t n = sendto(ctx->udp_sockfd, hdr->msg_iov[0].iov_base, 
-                           hdr->msg_iov[0].iov_len, 0, hdr->msg_name, hdr->msg_namelen);
-                    if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
-                        LOGERR("[udp_socks5_recv_udpmessage_cb] malloc-fallback sendto failed: %s", strerror(errno));
+            #ifdef ENABLE_SENDTO_LOG
+                char ipstr[IP6STRLEN];
+                ip_port_t *client = &socks5ctx->key_ipport;
+                /* Use dest protocol family as heuristic (client usually matches target) */
+                if (socks5ctx->dest_is_ipv4) {
+                    inet_ntop(AF_INET, &client->ip.ip4, ipstr, sizeof(ipstr));
+                } else {
+                    inet_ntop(AF_INET6, &client->ip.ip6, ipstr, sizeof(ipstr));
+                }
+                LOGINF("[udp_socks5_recv_udpmessage_cb] sendmmsg to %s#%hu: %d packets sent", 
+                       ipstr, ntohs(client->port), sent);
+            #endif
+                if (sent < group_count) {
+                    /* Fallback for unsent */
+                    LOGWAR("[udp_socks5_recv_udpmessage_cb] partial send %d/%d, using fallback", sent, group_count);
+                    for (int k = sent; k < group_count; k++) {
+                        struct msghdr *hdr = &group_msgs[k].msg_hdr;
+                        ssize_t n = sendto(ctx->udp_sockfd, hdr->msg_iov[0].iov_base, 
+                               hdr->msg_iov[0].iov_len, 0, hdr->msg_name, hdr->msg_namelen);
+                        #ifdef ENABLE_SENDTO_LOG
+                        if (n > 0) {
+                            char ipstr[IP6STRLEN]; portno_t portno;
+                            parse_socket_addr((skaddr6_t *)hdr->msg_name, ipstr, &portno);
+                            LOGINF("[udp_socks5_recv_udpmessage_cb] fallback sendto %s#%hu, nsend:%zd", ipstr, portno, n);
+                        }
+                        #endif
+                        if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+                            LOGERR("[udp_socks5_recv_udpmessage_cb] fallback sendto failed: %s", strerror(errno));
+                        }
                     }
                 }
             }
