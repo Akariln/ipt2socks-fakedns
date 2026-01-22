@@ -1,6 +1,8 @@
 #ifndef IPT2SOCKS_LRUCACHE_H
 #define IPT2SOCKS_LRUCACHE_H
 
+#include "xxhash.h"
+#define HASH_FUNCTION(key,len,hashv) { hashv = XXH32(key, len, 0); }
 #include "uthash.h"
 #include "netutils.h"
 #include "../libev/ev.h"

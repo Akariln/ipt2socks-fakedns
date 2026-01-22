@@ -593,8 +593,7 @@ do {                                                                            
 #ifdef HASH_FUNCTION
 #define HASH_FCN HASH_FUNCTION
 #else
-/* Use FNV-1a for better performance with small fixed-size keys like ip_port_t */
-#define HASH_FCN HASH_FNV
+#define HASH_FCN HASH_JEN
 #endif
 
 /* The Bernstein hash function, used in Perl prior to v5.6. Note (x<<5+x)=x*33. */

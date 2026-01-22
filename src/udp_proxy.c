@@ -917,15 +917,14 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, evio_t *udp_watcher,
             struct mmsghdr group_msgs[UDP_BATCH_SIZE];
             
             for (int k = 0; k < group_count; k++) {
-                group_msgs[k] = batch_sends[group_start + k].msg;
-                /* 
-                 * CRITICAL FIX: Update pointers after sorting.
-                 * batch_sends elements were swapped, so the internal pointers (msg_name, msg_iov)
-                 * in 'msg' still point to the OLD locations (which now hold different data).
-                 * We must re-point them to the current location.
-                 */
-                group_msgs[k].msg_hdr.msg_name = &batch_sends[group_start + k].addr;
-                group_msgs[k].msg_hdr.msg_iov = &batch_sends[group_start + k].iov;
+                group_msgs[k].msg_hdr.msg_name       = &batch_sends[group_start + k].addr;
+                group_msgs[k].msg_hdr.msg_namelen    = batch_sends[group_start + k].msg.msg_hdr.msg_namelen;
+                group_msgs[k].msg_hdr.msg_iov        = &batch_sends[group_start + k].iov;
+                group_msgs[k].msg_hdr.msg_iovlen     = 1;
+                group_msgs[k].msg_hdr.msg_control    = NULL;
+                group_msgs[k].msg_hdr.msg_controllen = 0;
+                group_msgs[k].msg_hdr.msg_flags      = 0;
+                group_msgs[k].msg_len                = 0;
             }
             
             int sent = sendmmsg(ctx->udp_sockfd, group_msgs, group_count, 0);
