@@ -195,72 +195,70 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
         memcpy(&fork_key.target_ip.ip6, &skaddr.sin6_addr.s6_addr, IP6BINLEN);
     }
 
-    /* Step 1: Check Fork Table (precise match: client + target) */
-    context = udp_socks5ctx_fork_get(&g_udp_fork_table, &fork_key);
-    
-    if (context) {
-        IF_VERBOSE {
-            LOGINF("[udp_tproxy_recvmsg_cb] reuse fork context: %s -> %s", ipstr, fake_domain ? fake_domain : "RealIP");
+    /* 
+     * Traffic Separation Strategy:
+     * 1. FakeDNS Traffic: Inherently Symmetric-NAT behavior (1:1 mapping between Client:Port and Target FakeIP).
+     *    MUST use Fork Table (key: Client + Target). Skips Main Table to avoid pollution.
+     * 2. Real IP Traffic: Preferred Full Cone behavior (1:N mapping).
+     *    MUST use Main Table (key: Client only) first. Only falls back to Fork Table on collision.
+     */
+    if (fake_domain) {
+        /* Strategy A: FakeDNS Traffic -> Fork Table Only */
+        context = udp_socks5ctx_fork_get(&g_udp_fork_table, &fork_key);
+        
+        if (!context) {
+            /* Not found, new session needed. Force fork to ensure it goes to Fork Table on creation */
+            force_fork = true;
+            IF_VERBOSE {
+                LOGINF("[udp_tproxy_recvmsg_cb] new FakeDNS session (will fork): %s -> %s", ipstr, fake_domain);
+            }
+        } else {
+             IF_VERBOSE {
+                LOGINF("[udp_tproxy_recvmsg_cb] reuse fork context (FakeDNS): %s -> %s", ipstr, fake_domain);
+            }
         }
-    }
-
-    if (!context) {
-        /* Step 2: Check Main Table (fast path: first target from client) */
+    } else {
+        /* Strategy B: Real IP Traffic -> Main Table (Full Cone) -> Fork Table (Fallback) */
+        
+        /* Step 1: Check Main Table (Fast Path, Full Cone) */
         udp_socks5ctx_t *main_ctx = udp_socks5ctx_get(&g_udp_socks5ctx_table, &key_ipport);
         
         if (main_ctx) {
-            /* Step 3: Check collision
-             * Conditions for reuse:
-             * 1. Protocol family matches (already checked above)
-             * 2. Type matches (FakeDNS vs Real IP)
-             * 3. IF FakeDNS: Target must match exactly (Symmetric NAT requirement for spoofing)
-             * 4. IF Real IP: Target can differ (Full Cone NAT allowed)
+            /* Check for collisions that require forking
+             * 1. Protocol family match (IPv4 vs IPv6)
+             * 2. Type match (Real IP vs FakeDNS placeholder)
+             *    Note: With separation, main_ctx should NEVER be FakeDNS, but checking is safe.
              */
-            bool req_is_fakedns = (fake_domain != NULL);
-            
-            if (main_ctx->dest_is_ipv4 != isipv4) {
-                // Protocol family mismatch -> Conflict
-                force_fork = true;
-            } else if (main_ctx->is_fakedns != req_is_fakedns) {
-                // Type mismatch (FakeDNS vs Real IP) -> Conflict
-                force_fork = true;
-            } else if (main_ctx->is_fakedns) {
-                // FakeDNS Mode: Must match target exactly for spoofing
-                bool target_matches;
-                if (isipv4) {
-                    target_matches = (main_ctx->orig_dstaddr.ip.ip4 == fork_key.target_ip.ip4);
-                } else {
-                    target_matches = (memcmp(&main_ctx->orig_dstaddr.ip.ip6,
-                                            &fork_key.target_ip.ip6, IP6BINLEN) == 0);
-                }
-                
-                if (!target_matches) {
-                    force_fork = true;
-                }
-            } else {
-                // Real IP Mode: Allow reuse for different targets (Full Cone NAT)
-                // No force_fork needed.
-            }
-
-            if (!force_fork) {
-                /* Target matches or allowed to differ - safe to reuse Main Table association */
-                context = main_ctx;
+             if (main_ctx->dest_is_ipv4 != isipv4) {
+                 /* Protocol mismatch (e.g. client used same port for IPv4 and IPv6 dest) */
+                 force_fork = true;
+             } else if (main_ctx->is_fakedns) {
+                 /* Should not happen if separation is strict, but handle safely */
+                 force_fork = true;
+             } else {
+                 /* Match! Reuse Main Context (Full Cone NAT) */
+                 context = main_ctx;
+                 IF_VERBOSE {
+                      char target_ipstr[IP6STRLEN]; portno_t target_port;
+                      parse_socket_addr(&skaddr, target_ipstr, &target_port);
+                      LOGINF("[udp_tproxy_recvmsg_cb] reuse main context (RealIP): %s -> %s#%d", ipstr, target_ipstr, target_port);
+                 }
+             }
+        }
+        
+        /* Step 2: If Main Table missed or collision occurred, check Fork Table */
+        if (!context) {
+            context = udp_socks5ctx_fork_get(&g_udp_fork_table, &fork_key);
+            if (context) {
                 IF_VERBOSE {
-                    if (fake_domain) {
-                        LOGINF("[udp_tproxy_recvmsg_cb] reuse main context (FakeDNS): %s -> %s", ipstr, fake_domain);
-                    } else {
-                        char target_ipstr[IP6STRLEN]; portno_t target_port;
-                        parse_socket_addr(&skaddr, target_ipstr, &target_port);
-                        LOGINF("[udp_tproxy_recvmsg_cb] reuse main context (RealIP): %s -> %s#%d", ipstr, target_ipstr, target_port);
-                    }
+                     LOGINF("[udp_tproxy_recvmsg_cb] reuse fork context (RealIP): %s -> RealIP", ipstr);
                 }
+            } else if (force_fork) {
+                 /* Collision confirmed and no Fork entry yet -> Create new Fork entry */
+                 /* context remains NULL, will jump to creation logic with force_fork=true */
             } else {
-                /* Collision detected, must fork */
-                if (fake_domain) {
-                    LOGINF("[udp_tproxy_recvmsg_cb] collision detected for %s, forcing fork", fake_domain);
-                } else {
-                    LOGINF("[udp_tproxy_recvmsg_cb] collision detected, forcing fork");
-                }
+                 /* No Main, No Fork -> Create new Main entry */
+                 /* context remains NULL, will jump to creation logic with force_fork=false */
             }
         }
     }
@@ -364,14 +362,18 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
         
         if (force_fork) {
             context->is_forked = true;
+            context->is_fakedns = (fake_domain != NULL); // Ensure this flag is set accurately
             del_context = udp_socks5ctx_fork_add(&g_udp_fork_table, context);
             IF_VERBOSE {
-                LOGINF("[udp_tproxy_recvmsg_cb] new fork context created");
+                if (fake_domain) {
+                    LOGINF("[udp_tproxy_recvmsg_cb] new fork context created (FakeDNS): %s -> %s", ipstr, fake_domain);
+                } else {
+                    LOGINF("[udp_tproxy_recvmsg_cb] new fork context created (RealIP Collision)");
+                }
             }
         } else {
-
             IF_VERBOSE {
-                 LOGINF("[udp_tproxy_recvmsg_cb] new main context created");
+                 LOGINF("[udp_tproxy_recvmsg_cb] new main context created (RealIP)");
             }
 
             context->is_forked = false;
