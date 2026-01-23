@@ -29,6 +29,13 @@ static uint32_t g_pool_used = 0;
 static uint32_t g_last_warn_used = 0;  /* for warning log throttling */
 static char g_cidr_str[64] = {0};
 
+/* Thread-local MRU cache for reverse lookup (lock-free optimization) */
+static __thread struct {
+    uint32_t ip;
+    char domain[256];
+    bool valid;
+} g_fakedns_mru = {0};
+
 static const uint32_t FAKEDNS_TTL = 43200; // 12 hours
 
 // Pool usage warning thresholds
@@ -217,7 +224,15 @@ uint32_t fakedns_lookup_domain(const char *domain) {
 bool fakedns_reverse_lookup(uint32_t ip, char *buffer, size_t buf_len) {
     if (!buffer || buf_len == 0) return false;
 
-    pthread_rwlock_rdlock(&g_fakedns_rwlock);  // Use read lock for lookup
+    /* 1. Fast Path: Check Thread-Local MRU Cache (Lock-Free) */
+    if (g_fakedns_mru.valid && g_fakedns_mru.ip == ip) {
+        strncpy(buffer, g_fakedns_mru.domain, buf_len - 1);
+        buffer[buf_len - 1] = '\0';
+        return true;
+    }
+
+    /* 2. Slow Path: Global Table Lookup (Read Lock) */
+    pthread_rwlock_rdlock(&g_fakedns_rwlock);
     fakedns_entry_t *entry = NULL;
     HASH_FIND_INT(g_fakedns_table, &ip, entry);
     bool found = false;
@@ -225,6 +240,12 @@ bool fakedns_reverse_lookup(uint32_t ip, char *buffer, size_t buf_len) {
         strncpy(buffer, entry->domain, buf_len - 1);
         buffer[buf_len - 1] = '\0';
         found = true;
+        
+        /* 3. Update MRU Cache */
+        g_fakedns_mru.ip = ip;
+        strncpy(g_fakedns_mru.domain, entry->domain, sizeof(g_fakedns_mru.domain) - 1);
+        g_fakedns_mru.domain[sizeof(g_fakedns_mru.domain) - 1] = '\0';
+        g_fakedns_mru.valid = true;
     }
     pthread_rwlock_unlock(&g_fakedns_rwlock);
     return found;
