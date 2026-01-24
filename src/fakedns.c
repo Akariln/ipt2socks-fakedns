@@ -15,7 +15,7 @@
 typedef struct {
     uint32_t ip; /* Key: Network Byte Order */
     char domain[256];
-    time_t expire;
+    int64_t expire;
     UT_hash_handle hh;
 } fakedns_entry_t;
 
@@ -101,7 +101,7 @@ uint32_t fakedns_lookup_domain(const char *domain) {
     uint32_t step = (uint32_t)(hash >> 32) | 1; 
 
     uint32_t offset = offset_start;
-    time_t now = time(NULL);
+    int64_t now = (int64_t)time(NULL);
     
     // Phase 1: Try read lock first for fast path (cache hit with valid TTL)
     pthread_rwlock_rdlock(&g_fakedns_rwlock);
@@ -118,10 +118,10 @@ uint32_t fakedns_lookup_domain(const char *domain) {
             break;
         } else if (strcmp(entry->domain, domain) == 0) {
             // Match found! Check if we need to update TTL
-            time_t remaining = entry->expire - now;
+            int64_t remaining = entry->expire - now;
             
             // Lazy update: only update if TTL remaining < 30%
-            if (remaining > (time_t)(FAKEDNS_TTL * 0.3)) {
+            if (remaining > (int64_t)(FAKEDNS_TTL * 0.3)) {
                 // TTL still healthy, return directly with read lock
                 pthread_rwlock_unlock(&g_fakedns_rwlock);
                 return ip_net;
@@ -288,11 +288,15 @@ size_t fakedns_process_query(const uint8_t *query, size_t qlen, uint8_t *buffer,
             offset++;
             break;
         }
+        if (len > 63) return 0; // RFC 1035: labels must be 63 octets or less
+
         if ((len & 0xC0) == 0xC0) return 0; // Pointers not allowed in Question section usually, and we don't support it in parser
         
         if (offset + 1 + len > qlen) return 0; // Overflow
         
-        if (dom_len + len + 1 > sizeof(domain)) return 0; // Too long
+        // RFC 1035: Domain name total length limit (text representation approx 253)
+        // We leave space for dot separator (if not first) and new label
+        if (dom_len + (dom_len > 0 ? 1 : 0) + len > 253) return 0; 
         
         if (dom_len > 0) domain[dom_len++] = '.';
         memcpy(domain + dom_len, query + offset + 1, len);
@@ -487,7 +491,7 @@ void fakedns_load(const char *path) {
 
     pthread_rwlock_wrlock(&g_fakedns_rwlock);  // Use write lock for loading
     
-    time_t now = time(NULL);
+    int64_t now = (int64_t)time(NULL);
     uint32_t loaded = 0;
     for (uint32_t i = 0; i < count; i++) {
         uint32_t ip;
@@ -522,7 +526,7 @@ void fakedns_load(const char *path) {
         domain[dlen] = '\0';
 
         // Refresh TTL on load
-        time_t expire = now + FAKEDNS_TTL;
+        int64_t expire = now + FAKEDNS_TTL;
 
         // Add to hash
          fakedns_entry_t *entry = NULL;
