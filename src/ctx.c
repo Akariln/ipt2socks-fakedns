@@ -4,6 +4,10 @@ bool     g_verbose  = false;
 uint16_t g_options  = OPT_ENABLE_TCP | OPT_ENABLE_UDP | OPT_ENABLE_IPV4 | OPT_ENABLE_IPV6;
 uint8_t  g_nthreads = 1;
 
+// Thread management for graceful shutdown
+thread_info_t g_threads[MAX_THREADS] = {0};
+int g_thread_count = 0;
+
 char      g_bind_ipstr4[IP4STRLEN] = IP4STR_LOOPBACK;
 char      g_bind_ipstr6[IP6STRLEN] = IP6STR_LOOPBACK;
 portno_t  g_bind_portno            = 60080;

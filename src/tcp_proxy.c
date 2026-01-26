@@ -73,6 +73,7 @@ static inline void tcp_context_release(evloop_t *evloop, tcp_context_t *context,
 }
 
 void tcp_proxy_close_all_sessions(evloop_t *evloop) {
+    LOGINF("[tcp_proxy_close_all_sessions] cleaning up remaining sessions...");
     tcp_context_t *curr = (tcp_context_t *)g_tcp_session_head;
     while (curr) {
         tcp_context_t *next = curr->next;

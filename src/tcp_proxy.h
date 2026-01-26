@@ -1,8 +1,9 @@
 #ifndef IPT2SOCKS_TCP_PROXY_H
 #define IPT2SOCKS_TCP_PROXY_H
 
-#include <stdint.h>
 #include "../libev/ev.h"
+
+#include <stdint.h>
 
 #define TCP_SPLICE_MAXLEN 65535 /* uint16_t: 0~65535 */
 

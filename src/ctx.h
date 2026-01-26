@@ -1,13 +1,29 @@
 #ifndef IPT2SOCKS_CTX_H
 #define IPT2SOCKS_CTX_H
 
-#include <stdbool.h>
-#include <stdint.h>
 #include "netutils.h"
 #include "lrucache.h"
 #include "mempool.h"
 
+#include "../libev/ev.h"
+
+#include <stdbool.h>
+#include <stdint.h>
+#include <pthread.h>
+
 #define UDP_BATCH_SIZE 64
+#define MAX_THREADS 64
+
+// Thread info structure for graceful shutdown
+typedef struct {
+    pthread_t thread_id;
+    evloop_t *evloop;
+    ev_async exit_watcher;
+} thread_info_t;
+
+// Global thread management
+extern thread_info_t g_threads[MAX_THREADS];
+extern int g_thread_count;  // excluding main thread
 
 enum {
     OPT_ENABLE_TCP         = 0x01 << 0, // enable tcp proxy

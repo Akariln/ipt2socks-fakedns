@@ -5,7 +5,12 @@
 #define HASH_FUNCTION(key,len,hashv) { hashv = XXH32(key, len, 0); }
 #include "uthash.h"
 #include "netutils.h"
+
 #include "../libev/ev.h"
+
+#include <stdint.h>
+#include <stddef.h>
+#include <stdbool.h>
 
 typedef struct {
     ip_port_t  client_ipport;

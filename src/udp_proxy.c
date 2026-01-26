@@ -19,7 +19,7 @@
 
 #include <sys/socket.h>
 
-/* Forward declarations for static functions moved from ipt2socks.c */
+/* Forward declarations */
 static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, struct msghdr *msg, ssize_t nrecv, char *buffer);
 static void udp_socks5_connect_cb(evloop_t *evloop, evio_t *tcp_watcher, int revents);
 static void udp_socks5_send_authreq_cb(evloop_t *evloop, evio_t *watcher, int revents);

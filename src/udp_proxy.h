@@ -1,9 +1,10 @@
 #ifndef IPT2SOCKS_UDP_PROXY_H
 #define IPT2SOCKS_UDP_PROXY_H
 
+#include "../libev/ev.h"
+
 #include <stdint.h>
 #include <stddef.h>
-#include "../libev/ev.h"
 
 /* Memory pool configuration */
 #define MEMPOOL_BLOCK_SIZE    2048

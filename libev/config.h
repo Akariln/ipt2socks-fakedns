@@ -27,7 +27,7 @@
 #define EV_EMBED_ENABLE 0 /* disable ev_embed watcher */
 #define EV_FORK_ENABLE 0 /* disable ev_fork watcher */
 #define EV_CLEANUP_ENABLE 0 /* disable ev_cleanup watcher */
-#define EV_ASYNC_ENABLE 0 /* disbale ev_async watcher */
+#define EV_ASYNC_ENABLE 1 /* enable ev_async watcher for graceful shutdown */
 
 #define EV_USE_SELECT 0
 #define EV_USE_POLL 0
