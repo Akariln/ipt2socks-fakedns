@@ -333,8 +333,6 @@ static void parse_command_args(int argc, char* argv[]) {
         socks5_usrpwd_request_make(optval_auth_username, optval_auth_password);
     }
 
-    if (!(g_options & OPT_ENABLE_TCP)) g_nthreads = 1;
-
     build_socket_addr(AF_INET, &g_bind_skaddr4, g_bind_ipstr4, g_bind_portno);
     build_socket_addr(AF_INET6, &g_bind_skaddr6, g_bind_ipstr6, g_bind_portno);
     build_socket_addr(get_ipstr_family(g_server_ipstr), &g_server_skaddr, g_server_ipstr, g_server_portno);
