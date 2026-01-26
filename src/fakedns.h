@@ -11,6 +11,8 @@ bool fakedns_reverse_lookup(uint32_t ip, char *buffer, size_t buf_len);
 
 size_t fakedns_process_query(const uint8_t *query, size_t qlen, uint8_t *buffer, size_t buflen);
 
+bool fakedns_is_fakeip(uint32_t ip_net);
+
 void fakedns_save(const char *path);
 void fakedns_load(const char *path);
 

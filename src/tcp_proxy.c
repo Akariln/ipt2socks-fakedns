@@ -124,6 +124,23 @@ void tcp_tproxy_accept_cb(evloop_t *evloop, evio_t *accept_watcher, int revents 
         LOGINF("[tcp_tproxy_accept_cb] try to connect to %s#%hu ...", g_server_ipstr, g_server_portno);
     }
 
+    /* FakeDNS reverse lookup for domain resolution */
+    const char *fake_domain = NULL;
+    char domain_buf[256];
+    if ((g_options & OPT_ENABLE_FAKEDNS) && isipv4 && fakedns_is_fakeip(((skaddr4_t *)&skaddr)->sin_addr.s_addr)) {
+        if (fakedns_reverse_lookup(((skaddr4_t *)&skaddr)->sin_addr.s_addr, domain_buf, sizeof(domain_buf))) {
+            fake_domain = domain_buf;
+            LOGINF("[tcp_tproxy_accept_cb] fakedns hit: %u.%u.%u.%u -> %s",
+                ((uint8_t *)&skaddr)[4], ((uint8_t *)&skaddr)[5], ((uint8_t *)&skaddr)[6], ((uint8_t *)&skaddr)[7], fake_domain);
+        } else {
+            LOGERR("[tcp_tproxy_accept_cb] fakedns miss for FakeIP: %u.%u.%u.%u, dropping connection",
+                ((uint8_t *)&skaddr)[4], ((uint8_t *)&skaddr)[5], ((uint8_t *)&skaddr)[6], ((uint8_t *)&skaddr)[7]);
+            tcp_close_by_rst(client_sockfd);
+            close(socks5_sockfd);
+            return;
+        }
+    }
+
     tcp_context_t *context = mempool_alloc_sized(g_tcp_context_pool, sizeof(tcp_context_t));
     if (!context) {
         LOGERR("[tcp_tproxy_accept_cb] mempool_alloc failed");
@@ -146,16 +163,6 @@ void tcp_tproxy_accept_cb(evloop_t *evloop, evio_t *accept_watcher, int revents 
     ev_io_init(watcher, tcp_stream_payload_forward_cb, client_sockfd, EV_READ | EV_CUSTOM);
 
     /* build the ipv4/ipv6 proxy request (send to the socks5 proxy server) */
-    const char *fake_domain = NULL;
-    char domain_buf[256];
-    if ((g_options & OPT_ENABLE_FAKEDNS) && isipv4) {
-        if (fakedns_reverse_lookup(((skaddr4_t *)&skaddr)->sin_addr.s_addr, domain_buf, sizeof(domain_buf))) {
-            fake_domain = domain_buf;
-            LOGINF("[tcp_tproxy_accept_cb] fakedns hit: %u.%u.%u.%u -> %s", 
-                ((uint8_t *)&skaddr)[4], ((uint8_t *)&skaddr)[5], ((uint8_t *)&skaddr)[6], ((uint8_t *)&skaddr)[7], fake_domain);
-        }
-    }
-    
     /* Use embedded buffer for request (offset 0) */
     context->client_watcher.data = context->handshake_buf;
     

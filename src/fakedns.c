@@ -235,6 +235,12 @@ uint32_t fakedns_lookup_domain(const char *domain, size_t len) {
     return 0;
 }
 
+bool fakedns_is_fakeip(uint32_t ip_net) {
+    if (!g_pool_size) return false;
+    uint32_t ip_host = ntohl(ip_net);
+    return ((ip_host & g_fakeip_mask_host) == g_fakeip_net_host);
+}
+
 bool fakedns_reverse_lookup(uint32_t ip, char *buffer, size_t buf_len) {
     if (!buffer || buf_len == 0) return false;
 

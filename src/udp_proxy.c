@@ -165,12 +165,19 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
     char domain_buf[256];
     if ((g_options & OPT_ENABLE_FAKEDNS) && isipv4) {
         uint32_t target_ip = ((skaddr4_t *)&skaddr)->sin_addr.s_addr;
-        if (fakedns_reverse_lookup(target_ip, domain_buf, sizeof(domain_buf))) {
-            fake_domain = domain_buf;
-            LOGINF("[udp_tproxy_recvmsg_cb] fakedns hit: %u.%u.%u.%u -> %s",
-                   ((uint8_t *)&target_ip)[0], ((uint8_t *)&target_ip)[1],
-                   ((uint8_t *)&target_ip)[2], ((uint8_t *)&target_ip)[3],
-                   fake_domain);
+        if (fakedns_is_fakeip(target_ip)) {
+            if (fakedns_reverse_lookup(target_ip, domain_buf, sizeof(domain_buf))) {
+                fake_domain = domain_buf;
+                LOGINF("[udp_tproxy_recvmsg_cb] fakedns hit: %u.%u.%u.%u -> %s",
+                       ((uint8_t *)&target_ip)[0], ((uint8_t *)&target_ip)[1],
+                       ((uint8_t *)&target_ip)[2], ((uint8_t *)&target_ip)[3],
+                       fake_domain);
+            } else {
+                LOGERR("[udp_tproxy_recvmsg_cb] fakedns miss for FakeIP: %u.%u.%u.%u, dropping packet",
+                       ((uint8_t *)&target_ip)[0], ((uint8_t *)&target_ip)[1],
+                       ((uint8_t *)&target_ip)[2], ((uint8_t *)&target_ip)[3]);
+                return;
+            }
         }
     }
 
