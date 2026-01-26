@@ -675,12 +675,12 @@ static void udp_socks5_recv_proxyresp_cb(evloop_t *evloop, evio_t *tcp_watcher, 
     while (curr) {
         ssize_t nsend = send(udp_sockfd, curr->data, curr->len, 0);
         if (nsend < 0 || g_verbose) {
-            char ipstr[IP6STRLEN]; portno_t portno;
+            char ipstr[260]; portno_t portno;
             uint8_t addrtype = ((socks5_udp4msg_t *)curr->data)->addrtype;
             
             if (addrtype == SOCKS5_ADDRTYPE_IPV4) {
                 socks5_udp4msg_t *udp4msg = (void *)curr->data;
-                inet_ntop(AF_INET, &udp4msg->ipaddr4, ipstr, IP6STRLEN);
+                inet_ntop(AF_INET, &udp4msg->ipaddr4, ipstr, sizeof(ipstr));
                 portno = ntohs(udp4msg->portnum);
             } else if (addrtype == SOCKS5_ADDRTYPE_DOMAIN) {
                 /* Domain format: extract domain and port for logging */
@@ -692,7 +692,7 @@ static void udp_socks5_recv_proxyresp_cb(evloop_t *evloop, evio_t *tcp_watcher, 
                 portno = ntohs(portno);
             } else {
                 socks5_udp6msg_t *udp6msg = (void *)curr->data;
-                inet_ntop(AF_INET6, &udp6msg->ipaddr6, ipstr, IP6STRLEN);
+                inet_ntop(AF_INET6, &udp6msg->ipaddr6, ipstr, sizeof(ipstr));
                 portno = ntohs(udp6msg->portnum);
             }
             if (nsend < 0) {
