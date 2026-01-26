@@ -129,17 +129,16 @@ static void parse_command_args(int argc, char* argv[]) {
                 }
                 strcpy(g_server_ipstr, optarg);
                 break;
-            case 'p':
-                if (strlen(optarg) + 1 > PORTSTRLEN) {
-                    printf("[parse_command_args] port number max length is 5: %s\n", optarg);
-                    goto PRINT_HELP_AND_EXIT;
-                }
-                g_server_portno = strtoul(optarg, NULL, 10);
-                if (g_server_portno == 0) {
+            case 'p': {
+                char *endptr;
+                unsigned long port = strtoul(optarg, &endptr, 10);
+                if (*endptr != '\0' || port == 0 || port > 65535) {
                     printf("[parse_command_args] invalid server port number: %s\n", optarg);
                     goto PRINT_HELP_AND_EXIT;
                 }
+                g_server_portno = (portno_t)port;
                 break;
+            }
             case 'a':
                 if (strlen(optarg) > SOCKS5_USRPWD_USRMAXLEN) {
                     printf("[parse_command_args] socks5 username max length is 255: %s\n", optarg);
@@ -176,50 +175,66 @@ static void parse_command_args(int argc, char* argv[]) {
                 }
                 strcpy(g_bind_ipstr6, optarg);
                 break;
-            case 'l':
-                if (strlen(optarg) + 1 > PORTSTRLEN) {
-                    printf("[parse_command_args] port number max length is 5: %s\n", optarg);
-                    goto PRINT_HELP_AND_EXIT;
-                }
-                g_bind_portno = strtoul(optarg, NULL, 10);
-                if (g_bind_portno == 0) {
+            case 'l': {
+                char *endptr;
+                unsigned long port = strtoul(optarg, &endptr, 10);
+                if (*endptr != '\0' || port == 0 || port > 65535) {
                     printf("[parse_command_args] invalid listen port number: %s\n", optarg);
                     goto PRINT_HELP_AND_EXIT;
                 }
+                g_bind_portno = (portno_t)port;
                 break;
-            case 'S':
-                g_tcp_syncnt_max = strtoul(optarg, NULL, 10);
-                if (g_tcp_syncnt_max == 0) {
+            }
+            case 'S': {
+                char *endptr;
+                unsigned long val = strtoul(optarg, &endptr, 10);
+                if (*endptr != '\0' || val == 0 || val > 255) {
                     printf("[parse_command_args] invalid number of syn retransmits: %s\n", optarg);
                     goto PRINT_HELP_AND_EXIT;
                 }
+                g_tcp_syncnt_max = (uint8_t)val;
                 break;
+            }
             case 'c': {
-                uint16_t cache_size = strtoul(optarg, NULL, 10);
-                if (cache_size == 0) {
+                char *endptr;
+                unsigned long val = strtoul(optarg, &endptr, 10);
+                if (*endptr != '\0' || val == 0 || val > 65535) {
                     printf("[parse_command_args] invalid maxsize of udp lrucache: %s\n", optarg);
                     goto PRINT_HELP_AND_EXIT;
                 }
-                lrucache_set_maxsize(cache_size);
+                lrucache_set_maxsize((uint16_t)val);
                 break;
             }
-            case 'o':
-                g_udp_idletimeout_sec = strtoul(optarg, NULL, 10);
-                if (g_udp_idletimeout_sec == 0) {
+            case 'o': {
+                char *endptr;
+                unsigned long val = strtoul(optarg, &endptr, 10);
+                if (*endptr != '\0' || val == 0 || val > 65535) {
                     printf("[parse_command_args] invalid udp socket idle timeout: %s\n", optarg);
                     goto PRINT_HELP_AND_EXIT;
                 }
+                g_udp_idletimeout_sec = (uint16_t)val;
                 break;
-            case 'j':
-                g_nthreads = strtoul(optarg, NULL, 10);
-                if (g_nthreads == 0) {
+            }
+            case 'j': {
+                char *endptr;
+                unsigned long val = strtoul(optarg, &endptr, 10);
+                if (*endptr != '\0' || val == 0 || val > 255) {
                     printf("[parse_command_args] invalid number of worker threads: %s\n", optarg);
                     goto PRINT_HELP_AND_EXIT;
                 }
+                g_nthreads = (uint8_t)val;
                 break;
-            case 'n':
-                set_nofile_limit(strtoul(optarg, NULL, 10));
+            }
+            case 'n': {
+                char *endptr;
+                unsigned long val = strtoul(optarg, &endptr, 10);
+                if (*endptr != '\0' || val == 0) {
+                    printf("[parse_command_args] invalid nofile limit: %s\n", optarg);
+                    goto PRINT_HELP_AND_EXIT;
+                }
+                set_nofile_limit(val);
                 break;
+            }
             case 'u':
                 run_as_user(optarg, argv);
                 break;
