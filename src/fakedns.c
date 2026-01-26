@@ -129,12 +129,17 @@ uint32_t fakedns_lookup_domain(const char *domain, size_t len) {
                 return ip_net;
             }
             
+#if defined(__x86_64__) || defined(__aarch64__) || defined(__LP64__) || defined(__mips64)
             // Optimistic Update: Use atomic store to update TTL under READ lock
             // This avoids upgrading to write lock for simple refresh
             __atomic_store_n(&entry->expire, now + FAKEDNS_TTL, __ATOMIC_RELAXED);
             
             pthread_rwlock_unlock(&g_fakedns_rwlock);
             return ip_net;
+#else
+            // Fall back to write lock path on 32-bit to avoid 64-bit atomic link errors
+            break;
+#endif
         } else {
             // Collision, continue probing (Double Hashing)
             offset = (offset + step) % g_pool_size;
