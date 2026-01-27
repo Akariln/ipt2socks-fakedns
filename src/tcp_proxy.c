@@ -107,6 +107,22 @@ void tcp_tproxy_accept_cb(evloop_t *evloop, evio_t *accept_watcher, int revents 
         LOGINF("[tcp_tproxy_accept_cb] target socket address: %s#%hu", ipstr, portno);
     }
 
+    /* FakeDNS reverse lookup for domain resolution */
+    const char *fake_domain = NULL;
+    char domain_buf[256];
+    if ((g_options & OPT_ENABLE_FAKEDNS) && isipv4 && fakedns_is_fakeip(((skaddr4_t *)&skaddr)->sin_addr.s_addr)) {
+        if (fakedns_reverse_lookup(((skaddr4_t *)&skaddr)->sin_addr.s_addr, domain_buf, sizeof(domain_buf))) {
+            fake_domain = domain_buf;
+            LOGINF("[tcp_tproxy_accept_cb] fakedns hit: %u.%u.%u.%u -> %s",
+                ((uint8_t *)&skaddr)[4], ((uint8_t *)&skaddr)[5], ((uint8_t *)&skaddr)[6], ((uint8_t *)&skaddr)[7], fake_domain);
+        } else {
+            LOGERR("[tcp_tproxy_accept_cb] fakedns miss for FakeIP: %u.%u.%u.%u, dropping connection",
+                ((uint8_t *)&skaddr)[4], ((uint8_t *)&skaddr)[5], ((uint8_t *)&skaddr)[6], ((uint8_t *)&skaddr)[7]);
+            tcp_close_by_rst(client_sockfd);
+            return;
+        }
+    }
+
     int socks5_sockfd = new_tcp_connect_sockfd(g_server_skaddr.sin6_family, g_tcp_syncnt_max);
     const void *tfo_data = (g_options & OPT_ENABLE_TFO_CONNECT) ? &g_socks5_auth_request : NULL;
     uint16_t tfo_datalen = (g_options & OPT_ENABLE_TFO_CONNECT) ? sizeof(socks5_authreq_t) : 0;
@@ -122,23 +138,6 @@ void tcp_tproxy_accept_cb(evloop_t *evloop, evio_t *accept_watcher, int revents 
         LOGINF("[tcp_tproxy_accept_cb] tfo send to %s#%hu, nsend:%zd", g_server_ipstr, g_server_portno, tfo_nsend);
     } else {
         LOGINF("[tcp_tproxy_accept_cb] try to connect to %s#%hu ...", g_server_ipstr, g_server_portno);
-    }
-
-    /* FakeDNS reverse lookup for domain resolution */
-    const char *fake_domain = NULL;
-    char domain_buf[256];
-    if ((g_options & OPT_ENABLE_FAKEDNS) && isipv4 && fakedns_is_fakeip(((skaddr4_t *)&skaddr)->sin_addr.s_addr)) {
-        if (fakedns_reverse_lookup(((skaddr4_t *)&skaddr)->sin_addr.s_addr, domain_buf, sizeof(domain_buf))) {
-            fake_domain = domain_buf;
-            LOGINF("[tcp_tproxy_accept_cb] fakedns hit: %u.%u.%u.%u -> %s",
-                ((uint8_t *)&skaddr)[4], ((uint8_t *)&skaddr)[5], ((uint8_t *)&skaddr)[6], ((uint8_t *)&skaddr)[7], fake_domain);
-        } else {
-            LOGERR("[tcp_tproxy_accept_cb] fakedns miss for FakeIP: %u.%u.%u.%u, dropping connection",
-                ((uint8_t *)&skaddr)[4], ((uint8_t *)&skaddr)[5], ((uint8_t *)&skaddr)[6], ((uint8_t *)&skaddr)[7]);
-            tcp_close_by_rst(client_sockfd);
-            close(socks5_sockfd);
-            return;
-        }
     }
 
     tcp_context_t *context = mempool_alloc_sized(g_tcp_context_pool, sizeof(tcp_context_t));
