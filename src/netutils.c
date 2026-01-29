@@ -265,14 +265,15 @@ static inline void setup_accepted_sockfd(int sockfd) {
     set_tcp_keepalive(sockfd);
 }
 
-void new_nonblock_pipefd(int pipefd[2]) {
+int new_nonblock_pipefd(int pipefd[2]) {
     if (pipe(pipefd) < 0) {
         LOGERR("[new_nonblock_pipefd] pipe(%p): %s", (void *)pipefd, strerror(errno));
         pipefd[0] = pipefd[1] = -1;
-        return;
+        return -1;
     }
     set_non_block(pipefd[0]);
     set_non_block(pipefd[1]);
+    return 0;
 }
 
 static inline int new_nonblock_sockfd(int family, int sktype) {

@@ -377,8 +377,16 @@ static void tcp_socks5_recv_proxyresp_cb(evloop_t *evloop, evio_t *socks5_watche
     socks5_watcher->data = NULL;
     context->client_watcher.data = NULL;
 
-    new_nonblock_pipefd(context->client_pipefd);
-    new_nonblock_pipefd(context->socks5_pipefd);
+    if (new_nonblock_pipefd(context->client_pipefd) < 0) {
+        LOGERR("[tcp_socks5_recv_proxyresp_cb] failed to create client pipe");
+        tcp_context_release(evloop, context, true);
+        return;
+    }
+    if (new_nonblock_pipefd(context->socks5_pipefd) < 0) {
+        LOGERR("[tcp_socks5_recv_proxyresp_cb] failed to create socks5 pipe");
+        tcp_context_release(evloop, context, true);
+        return;
+    }
 
     ev_io_start(evloop, &context->client_watcher);
     ev_set_cb(socks5_watcher, tcp_stream_payload_forward_cb);
