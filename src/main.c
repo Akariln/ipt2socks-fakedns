@@ -385,9 +385,10 @@ int main(int argc, char* argv[]) {
 
     g_thread_count = g_nthreads - 1;
     for (int i = 0; i < g_thread_count; ++i) {
-        if (pthread_create(&g_threads[i].thread_id, NULL, run_event_loop, &g_threads[i])) {
-            LOGERR("[main] create worker thread: %s", strerror(errno));
-            return errno;
+        int ret = pthread_create(&g_threads[i].thread_id, NULL, run_event_loop, &g_threads[i]);
+        if (ret != 0) {
+            LOGERR("[main] create worker thread: %s", strerror(ret));
+            return ret;
         }
     }
     run_event_loop(NULL);  // main thread passes NULL
