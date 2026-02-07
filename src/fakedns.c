@@ -31,11 +31,14 @@ static uint32_t g_last_warn_used = 0;  /* for warning log throttling */
 static char g_cidr_str[64] = {0};
 
 /* Thread-local MRU cache for reverse lookup (lock-free optimization) */
-static __thread struct {
+#define FAKEDNS_MRU_SIZE 8
+typedef struct {
     uint32_t ip;
     char domain[256];
     bool valid;
-} g_fakedns_mru = {0};
+} fakedns_mru_entry_t;
+
+static __thread fakedns_mru_entry_t g_fakedns_mru[FAKEDNS_MRU_SIZE] = {0};
 
 static const uint32_t FAKEDNS_TTL = 43200; // 12 hours
 
@@ -245,10 +248,20 @@ bool fakedns_reverse_lookup(uint32_t ip, char *buffer, size_t buf_len) {
     if (!buffer || buf_len == 0) return false;
 
     /* 1. Fast Path: Check Thread-Local MRU Cache (Lock-Free) */
-    if (g_fakedns_mru.valid && g_fakedns_mru.ip == ip) {
-        strncpy(buffer, g_fakedns_mru.domain, buf_len - 1);
-        buffer[buf_len - 1] = '\0';
-        return true;
+    for (int i = 0; i < FAKEDNS_MRU_SIZE; ++i) {
+        if (g_fakedns_mru[i].valid && g_fakedns_mru[i].ip == ip) {
+            strncpy(buffer, g_fakedns_mru[i].domain, buf_len - 1);
+            buffer[buf_len - 1] = '\0';
+            
+            // Move-to-Front: promote found item to index 0
+            if (i > 0) {
+                // Shift [0..i-1] to [1..i]
+                fakedns_mru_entry_t tmp = g_fakedns_mru[i];
+                memmove(&g_fakedns_mru[1], &g_fakedns_mru[0], i * sizeof(fakedns_mru_entry_t));
+                g_fakedns_mru[0] = tmp;
+            }
+            return true;
+        }
     }
 
     /* 2. Slow Path: Global Table Lookup (Read Lock) */
@@ -261,11 +274,15 @@ bool fakedns_reverse_lookup(uint32_t ip, char *buffer, size_t buf_len) {
         buffer[buf_len - 1] = '\0';
         found = true;
         
-        /* 3. Update MRU Cache */
-        g_fakedns_mru.ip = ip;
-        strncpy(g_fakedns_mru.domain, entry->domain, sizeof(g_fakedns_mru.domain) - 1);
-        g_fakedns_mru.domain[sizeof(g_fakedns_mru.domain) - 1] = '\0';
-        g_fakedns_mru.valid = true;
+        /* 3. Update MRU Cache: Insert at front */
+        // Shift [0..N-2] to [1..N-1] (Evict last)
+        memmove(&g_fakedns_mru[1], &g_fakedns_mru[0], (FAKEDNS_MRU_SIZE - 1) * sizeof(fakedns_mru_entry_t));
+        
+        // Write new entry at 0
+        g_fakedns_mru[0].ip = ip;
+        strncpy(g_fakedns_mru[0].domain, entry->domain, sizeof(g_fakedns_mru[0].domain) - 1);
+        g_fakedns_mru[0].domain[sizeof(g_fakedns_mru[0].domain) - 1] = '\0';
+        g_fakedns_mru[0].valid = true;
     }
     pthread_rwlock_unlock(&g_fakedns_rwlock);
     return found;
