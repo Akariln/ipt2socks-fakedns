@@ -11,6 +11,7 @@
 #include <string.h>
 #include <arpa/inet.h>
 #include <errno.h>
+#include <unistd.h>
 #include <time.h>
 
 typedef struct {
@@ -97,7 +98,7 @@ void fakedns_init(const char *cidr_str) {
            FAKEDNS_POOL_CRITICAL_THRESHOLD * 100.0f, (uint32_t)(g_pool_size * FAKEDNS_POOL_CRITICAL_THRESHOLD));
 }
 
-uint32_t fakedns_lookup_domain(const char *domain, size_t len) {
+static uint32_t fakedns_lookup_domain(const char *domain, size_t len) {
     if (!domain || !g_pool_size) return 0;
 
     uint64_t hash = XXH3_64bits(domain, len);
@@ -349,9 +350,19 @@ size_t fakedns_process_query(const uint8_t *query, size_t qlen, uint8_t *buffer,
     
     // We only answer IN class (1)
     if (qclass != 1) {
-        resp_flags |= 0x0004; // Not Implemented or similar? Or just Refused?
-        // Let's just return NOERROR/NODATA for class mismatch or ignore.
-        // But for simplicity, we treat as NODATA.
+        resp_flags |= 0x0005; // Set RCODE to 5 (Refused)
+        
+        // Construct header and return immediately (NODATA)
+        if (offset + 4 > buflen) return 0;
+        memcpy(buffer, query, offset + 4);
+        
+        buffer[2] = (resp_flags >> 8) & 0xFF;
+        buffer[3] = resp_flags & 0xFF;
+        buffer[6] = 0; buffer[7] = 0; // ANCOUNT = 0
+        buffer[8] = 0; buffer[9] = 0; // NSCOUNT = 0
+        buffer[10] = 0; buffer[11] = 0; // ARCOUNT = 0
+        
+        return offset + 4; // Return header + question only
     }
     
     // Construct buffer
@@ -408,14 +419,17 @@ size_t fakedns_process_query(const uint8_t *query, size_t qlen, uint8_t *buffer,
 }
 
 static const uint32_t FAKEDNS_MAGIC = 0x464E5344; // "DNSF" Little Endian -> "FNSD"
-static const uint32_t FAKEDNS_VERSION = 2;
+static const uint32_t FAKEDNS_VERSION = 3;
 
 void fakedns_save(const char *path) {
     if (!path || !g_fakedns_table) return;
 
-    FILE *fp = fopen(path, "wb");
+    char tmp_path[512];
+    snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", path);
+
+    FILE *fp = fopen(tmp_path, "wb");
     if (!fp) {
-        LOGERR("[fakedns_save] failed to open %s: %s", path, strerror(errno));
+        LOGERR("[fakedns_save] failed to open tmp file %s: %s", tmp_path, strerror(errno));
         return;
     }
 
@@ -433,37 +447,57 @@ void fakedns_save(const char *path) {
     if (fwrite(&FAKEDNS_MAGIC, 4, 1, fp) != 1 ||
         fwrite(&FAKEDNS_VERSION, 4, 1, fp) != 1 ||
         fwrite(&count, 4, 1, fp) != 1) {
-        LOGERR("[fakedns_save] failed to write header to %s", path);
+        LOGERR("[fakedns_save] failed to write header to %s", tmp_path);
         pthread_rwlock_unlock(&g_fakedns_rwlock);
         fclose(fp);
+        unlink(tmp_path);
         return;
     }
 
-    // Version 2: Write CIDR
+    // Version 3: Write CIDR
     uint16_t cidr_len = strlen(g_cidr_str);
     if (fwrite(&cidr_len, 2, 1, fp) != 1 ||
         fwrite(g_cidr_str, 1, cidr_len, fp) != cidr_len) {
-        LOGERR("[fakedns_save] failed to write CIDR to %s", path);
+        LOGERR("[fakedns_save] failed to write CIDR to %s", tmp_path);
         pthread_rwlock_unlock(&g_fakedns_rwlock);
         fclose(fp);
+        unlink(tmp_path);
         return;
     }
 
     // Write Entries
+    bool success = true;
     HASH_ITER(hh, g_fakedns_table, entry, tmp) {
         uint16_t dlen = strlen(entry->domain);
         if (fwrite(&entry->ip, 4, 1, fp) != 1 ||
-            fwrite(&entry->expire, 8, 1, fp) != 1 ||
             fwrite(&dlen, 2, 1, fp) != 1 ||
             fwrite(entry->domain, 1, dlen, fp) != dlen) {
-            LOGERR("[fakedns_save] failed to write entry to %s", path);
+            LOGERR("[fakedns_save] failed to write entry to %s", tmp_path);
+            success = false;
             break;
         }
     }
 
     pthread_rwlock_unlock(&g_fakedns_rwlock);
+    
+    // Ensure data is flushed to disk
+    if (fflush(fp) != 0 || fsync(fileno(fp)) != 0) {
+         LOGERR("[fakedns_save] failed to flush/sync %s: %s", tmp_path, strerror(errno));
+         success = false;
+    }
+
     fclose(fp);
-    LOG_ALWAYS_INF("[fakedns_save] saved %u entries to %s", count, path);
+
+    if (success) {
+        if (rename(tmp_path, path) != 0) {
+            LOGERR("[fakedns_save] failed to rename %s to %s: %s", tmp_path, path, strerror(errno));
+            unlink(tmp_path);
+        } else {
+            LOG_ALWAYS_INF("[fakedns_save] saved %u entries to %s", count, path);
+        }
+    } else {
+        unlink(tmp_path);
+    }
 }
 
 void fakedns_load(const char *path) {
@@ -495,32 +529,30 @@ void fakedns_load(const char *path) {
         return;
     }
 
-    // Version 2: Check CIDR
-    if (version >= 2) {
-        uint16_t cidr_len;
-        if (fread(&cidr_len, 2, 1, fp) != 1) {
-            LOGERR("[fakedns_load] cidr len read error");
+    // Version 3: Check CIDR
+    uint16_t cidr_len;
+    if (fread(&cidr_len, 2, 1, fp) != 1) {
+        LOGERR("[fakedns_load] cidr len read error");
+        fclose(fp);
+        return;
+    }
+    if (cidr_len >= 64) {
+            LOGERR("[fakedns_load] cidr len too long: %u", cidr_len);
             fclose(fp);
             return;
-        }
-        if (cidr_len >= 64) {
-             LOGERR("[fakedns_load] cidr len too long: %u", cidr_len);
-             fclose(fp);
-             return;
-        }
-        char file_cidr[64];
-        if (fread(file_cidr, 1, cidr_len, fp) != cidr_len) {
-            LOGERR("[fakedns_load] cidr read error");
-            fclose(fp);
-            return;
-        }
-        file_cidr[cidr_len] = '\0';
-        
-        if (strcmp(file_cidr, g_cidr_str) != 0) {
-            LOGERR("[fakedns_load] CIDR mismatch. File: %s, Current: %s. Ignoring saved data.", file_cidr, g_cidr_str);
-            fclose(fp);
-            return;
-        }
+    }
+    char file_cidr[64];
+    if (fread(file_cidr, 1, cidr_len, fp) != cidr_len) {
+        LOGERR("[fakedns_load] cidr read error");
+        fclose(fp);
+        return;
+    }
+    file_cidr[cidr_len] = '\0';
+    
+    if (strcmp(file_cidr, g_cidr_str) != 0) {
+        LOGERR("[fakedns_load] CIDR mismatch. File: %s, Current: %s. Ignoring saved data.", file_cidr, g_cidr_str);
+        fclose(fp);
+        return;
     }
 
     pthread_rwlock_wrlock(&g_fakedns_rwlock);  // Use write lock for loading
@@ -529,10 +561,10 @@ void fakedns_load(const char *path) {
     uint32_t loaded = 0;
     for (uint32_t i = 0; i < count; i++) {
         uint32_t ip;
-        uint64_t expire64; // Read as 64-bit
         uint16_t dlen;
         
-        if (fread(&ip, 4, 1, fp) != 1 || fread(&expire64, 8, 1, fp) != 1 || fread(&dlen, 2, 1, fp) != 1) {
+        // Version 3: No expire read
+        if (fread(&ip, 4, 1, fp) != 1 || fread(&dlen, 2, 1, fp) != 1) {
             LOGERR("[fakedns_load] entry read error at %u", i);
             break;
         }
@@ -541,14 +573,20 @@ void fakedns_load(const char *path) {
         // g_fakeip_net_host is host byte order, ip is network byte order
         uint32_t ip_host = ntohl(ip);
         if ((ip_host & g_fakeip_mask_host) != g_fakeip_net_host) {
-            fseek(fp, dlen, SEEK_CUR); // Skip domain
+            if (fseek(fp, dlen, SEEK_CUR) != 0) {
+                 LOGERR("[fakedns_load] fseek failed for IP mismatch at %u", i);
+                 break;
+            }
             // Even if CIDR matches string-wise, let's be double safe
             continue;
         }
 
         if (dlen >= 256) {
              LOGERR("[fakedns_load] domain too long: %u", dlen);
-             fseek(fp, dlen, SEEK_CUR);
+             if (fseek(fp, dlen, SEEK_CUR) != 0) {
+                 LOGERR("[fakedns_load] fseek failed for long domain at %u", i);
+                 break;
+             }
              continue;
         }
 
@@ -572,15 +610,16 @@ void fakedns_load(const char *path) {
                  continue;
              }
              entry->ip = ip;
-             strncpy(entry->domain, domain, sizeof(entry->domain));
+             // dlen is checked < 256, so safe.
+             memcpy(entry->domain, domain, dlen + 1);
              entry->expire = expire;
              HASH_ADD_INT(g_fakedns_table, ip, entry);
              g_pool_used++;
              loaded++;
          } else {
-             // Overwrite if exists? Or ignore?
-             // Since we just started, likely collision or reload. Update logic.
-             strncpy(entry->domain, domain, sizeof(entry->domain));
+            // If entry already exists (e.g., duplicate IP in file or reloading),
+            // we overwrite it with the latest data from the file.
+             memcpy(entry->domain, domain, dlen + 1);
              entry->expire = expire;
          }
     }
