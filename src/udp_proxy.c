@@ -45,10 +45,6 @@ void udp_tproxy_recvmsg_cb(evloop_t *evloop, evio_t *tprecv_watcher, int revents
     char msg_control_buffers[UDP_BATCH_SIZE][UDP_CTRLMESG_BUFSIZ];
     skaddr6_t skaddrs[UDP_BATCH_SIZE];
 
-    /* memset(msgs, 0, sizeof(msgs)); */
-    /* memset(iovs, 0, sizeof(iovs)); */
-    /* memset(msg_control_buffers, 0, sizeof(msg_control_buffers)); */
-
     for (int i = 0; i < UDP_BATCH_SIZE; i++) {
         iovs[i].iov_base = (void *)g_udp_batch_buffer[i] + max_headerlen;
         iovs[i].iov_len = UDP_DATAGRAM_MAXSIZ - max_headerlen;
@@ -203,17 +199,19 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
     fork_key.target_is_ipv4 = isipv4;
     
     if (isipv4) {
-        fork_key.target_ip.ip4 = ((skaddr4_t *)&skaddr)->sin_addr.s_addr;
+        fork_key.target_ipport.ip.ip4 = ((skaddr4_t *)&skaddr)->sin_addr.s_addr;
+        fork_key.target_ipport.port = ((skaddr4_t *)&skaddr)->sin_port;
     } else {
-        memcpy(&fork_key.target_ip.ip6, &skaddr.sin6_addr.s6_addr, IP6BINLEN);
+        memcpy(&fork_key.target_ipport.ip.ip6, &skaddr.sin6_addr.s6_addr, IP6BINLEN);
+        fork_key.target_ipport.port = skaddr.sin6_port;
     }
 
     /* 
      * Traffic Separation Strategy:
-     * 1. FakeDNS Traffic: Inherently Symmetric-NAT behavior (1:1 mapping between Client:Port and Target FakeIP).
-     *    MUST use Fork Table (key: Client + Target). Skips Main Table to avoid pollution.
+     * 1. FakeDNS Traffic: Symmetric-NAT behavior (1:1 mapping per Client IP:Port + Target IP:Port).
+     *    Uses Fork Table exclusively. Skips Main Table to avoid pollution.
      * 2. Real IP Traffic: Preferred Full Cone behavior (1:N mapping).
-     *    MUST use Main Table (key: Client only) first. Only falls back to Fork Table on collision.
+     *    Uses Main Table (key: Client IP:Port only) first. Falls back to Fork Table on collision.
      */
     if (fake_domain) {
         /* Strategy A: FakeDNS Traffic -> Fork Table Only */
@@ -237,10 +235,9 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
         udp_socks5ctx_t *main_ctx = udp_socks5ctx_get(&g_udp_socks5ctx_table, &key_ipport);
         
         if (main_ctx) {
-            /* Check for collisions that require forking
-             * 1. Protocol family match (IPv4 vs IPv6)
-             * 2. Type match (Real IP vs FakeDNS placeholder)
-             *    Note: With separation, main_ctx should NEVER be FakeDNS, but checking is safe.
+            /* Check for collisions that require forking:
+             * 1. Protocol family mismatch (IPv4 vs IPv6)
+             * 2. Type mismatch (FakeDNS session occupying main slot)
              */
              if (main_ctx->dest_is_ipv4 != isipv4) {
                  /* Protocol mismatch (e.g. client used same port for IPv4 and IPv6 dest) */
@@ -259,20 +256,17 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
              }
         }
         
-        /* Step 2: If Main Table missed or collision occurred, check Fork Table */
+        /* Step 2: context is NULL means either Main Table missed, or collision occurred.
+         * If collision (force_fork=true), try Fork Table; if also missed, create new Fork entry.
+         * If no collision (force_fork=false), create new Main entry. */
         if (!context) {
             context = udp_socks5ctx_fork_get(&g_udp_fork_table, &fork_key);
             if (context) {
                 IF_VERBOSE {
                      LOGINF("[udp_tproxy_recvmsg_cb] reuse fork context (RealIP): %s -> RealIP", ipstr);
                 }
-            } else if (force_fork) {
-                 /* Collision confirmed and no Fork entry yet -> Create new Fork entry */
-                 /* context remains NULL, will jump to creation logic with force_fork=true */
-            } else {
-                 /* No Main, No Fork -> Create new Main entry */
-                 /* context remains NULL, will jump to creation logic with force_fork=false */
             }
+            /* If still NULL, creation logic below will use force_fork to decide which table */
         }
     }
 
@@ -374,9 +368,11 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
         context->fork_key.target_is_ipv4 = isipv4;
         
         if (isipv4) {
-            context->fork_key.target_ip.ip4 = ((skaddr4_t *)&skaddr)->sin_addr.s_addr;
+            context->fork_key.target_ipport.ip.ip4 = ((skaddr4_t *)&skaddr)->sin_addr.s_addr;
+            context->fork_key.target_ipport.port = ((skaddr4_t *)&skaddr)->sin_port;
         } else {
-            memcpy(&context->fork_key.target_ip.ip6, &skaddr.sin6_addr.s6_addr, IP6BINLEN);
+            memcpy(&context->fork_key.target_ipport.ip.ip6, &skaddr.sin6_addr.s6_addr, IP6BINLEN);
+            context->fork_key.target_ipport.port = skaddr.sin6_port;
         }
         
         if (force_fork) {
@@ -757,9 +753,6 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, evio_t *udp_watcher,
     
     struct mmsghdr msgs[UDP_BATCH_SIZE];
     struct iovec iovs[UDP_BATCH_SIZE];
-    
-    /* memset(msgs, 0, sizeof(msgs)); */
-    /* memset(iovs, 0, sizeof(iovs)); */
     
     /* Prepare for recvmmsg batch receive */
     for (int i = 0; i < UDP_BATCH_SIZE; i++) {

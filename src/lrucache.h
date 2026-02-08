@@ -14,19 +14,19 @@
 
 typedef struct {
     ip_port_t  client_ipport;
-    bool       target_is_ipv4;  // Protocol family flag for target
-    ipaddr_t   target_ip;       // Union: ip4 (32-bit) or ip6 (128-bit)
+    bool       target_is_ipv4; // Protocol family flag for target
+    ip_port_t  target_ipport;  // Target IP + Port (Full address for Symmetric NAT)
 } udp_fork_key_t;
 
 typedef struct {
-    ip_port_t  key_ipport;  // (local) source socket address (Main Key)
-    udp_fork_key_t fork_key; // Fork Key (Client + TargetIP)
+    ip_port_t  key_ipport;   // Client IP:Port (Main Table key)
+    udp_fork_key_t fork_key; // Client IP:Port + Target IP:Port (Fork Table key)
     ip_port_t  orig_dstaddr; // Original destination address (FakeIP or real IP)
     bool       dest_is_ipv4; // Protocol family flag for orig_dstaddr
     bool       is_forked;    // Is this session in the Fork Table?
     bool       is_fakedns;   // Is this a FakeDNS session?
-    evio_t     tcp_watcher; // .data: len(16bit) | recvbuff
-    evio_t     udp_watcher; // .data: len(16bit) | firstmsg
+    evio_t     tcp_watcher;  // .data: len(16bit) | recvbuff
+    evio_t     udp_watcher;  // .data: len(16bit) | firstmsg
     evtimer_t  idle_timer;
     myhash_hh  hh;
 } udp_socks5ctx_t;
