@@ -38,8 +38,14 @@ typedef struct {
     myhash_hh  hh;
 } udp_tproxyctx_t;
 
-uint16_t lrucache_get_maxsize(void);
-void     lrucache_set_maxsize(uint16_t maxsize);
+uint16_t lrucache_get_main_maxsize(void);
+uint16_t lrucache_get_fork_maxsize(void);
+uint16_t lrucache_get_tproxy_maxsize(void);
+
+void lrucache_set_main_maxsize(uint16_t maxsize);
+void lrucache_set_fork_maxsize(uint16_t maxsize);
+void lrucache_set_tproxy_maxsize(uint16_t maxsize);
+void lrucache_set_maxsize(uint16_t maxsize);  /* Set all caches */
 
 /* return the removed hashentry pointer */
 udp_socks5ctx_t* udp_socks5ctx_add(udp_socks5ctx_t **cache, udp_socks5ctx_t *entry);

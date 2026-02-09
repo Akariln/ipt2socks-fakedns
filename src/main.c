@@ -370,7 +370,8 @@ int main(int argc, char* argv[]) {
     if (g_options & OPT_ENABLE_IPV4) LOG_ALWAYS_INF("[main] listen address: %s#%hu", g_bind_ipstr4, g_bind_portno);
     if (g_options & OPT_ENABLE_IPV6) LOG_ALWAYS_INF("[main] listen address: %s#%hu", g_bind_ipstr6, g_bind_portno);
     if (g_tcp_syncnt_max) LOG_ALWAYS_INF("[main] max number of syn retries: %hhu", g_tcp_syncnt_max);
-    LOG_ALWAYS_INF("[main] udp session cache capacity: %hu", lrucache_get_maxsize());
+    LOG_ALWAYS_INF("[main] udp cache capacity: main=%hu fork=%hu tproxy=%hu", 
+                   lrucache_get_main_maxsize(), lrucache_get_fork_maxsize(), lrucache_get_tproxy_maxsize());
     LOG_ALWAYS_INF("[main] udp session idle timeout: %hu", g_udp_idletimeout_sec);
     LOG_ALWAYS_INF("[main] number of worker threads: %hhu", g_nthreads);
     LOG_ALWAYS_INF("[main] max file descriptor limit: %zu", get_nofile_limit());
@@ -461,7 +462,10 @@ static void* run_event_loop(void *arg) {
     }
 
     /* Initialize memory pools (thread-local) */
-    size_t cache_size = lrucache_get_maxsize();
+    /* Context pool serves: Main table + Fork table + TProxy table */
+    size_t cache_size = lrucache_get_main_maxsize() 
+                      + lrucache_get_fork_maxsize()
+                      + lrucache_get_tproxy_maxsize();
     size_t initial_blocks = cache_size;
     
     if (initial_blocks < MEMPOOL_INITIAL_SIZE) initial_blocks = MEMPOOL_INITIAL_SIZE;
@@ -478,9 +482,11 @@ static void* run_event_loop(void *arg) {
         goto cleanup;
     }
 
-    /* Context Pool */
+    /* 2. UDP Context Pool: serves udp_socks5ctx_t (264 bytes) and udp_tproxyctx_t (120 bytes)
+     * Block size = max(sizeof(udp_socks5ctx_t), sizeof(udp_tproxyctx_t)) 
+     * Note: udp_tproxyctx_t wastes ~54% per allocation, acceptable for reduced fragmentation */
     g_udp_context_pool = mempool_create(
-        sizeof(udp_socks5ctx_t), 
+        sizeof(udp_socks5ctx_t),  /* 264 bytes (larger of the two) */
         initial_blocks, 
         initial_blocks * 2
     );

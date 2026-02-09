@@ -59,42 +59,64 @@ memory_pool_t* mempool_create(size_t block_size, size_t initial_blocks, size_t m
     return pool;
 }
 
-/* Allocate memory with size awareness */
+#ifndef MIN
+#define MIN(a,b) (((a)<(b))?(a):(b))
+#endif
+
+#define EXPAND_BATCH_SIZE 32
+
+/* Allocate memory with size awareness and batch expansion */
 void* mempool_alloc_sized(memory_pool_t *pool, size_t size) {
     if (!pool) return NULL;
     
-    /* Large packet bypass: direct malloc */
+    /* 1. Large packet bypass: direct malloc */
     if (size > pool->block_size) {
         pool->bypass_allocs++;
         return malloc(size);
     }
     
-    void *block = NULL;
+    /* 2. If pool is empty, try batch expansion */
+    if (!pool->free_list) {
+        size_t remaining = pool->max_blocks - pool->total_blocks;
+        size_t expand_target = MIN(EXPAND_BATCH_SIZE, remaining);
+        size_t actual_added = 0;
+
+        for (size_t i = 0; i < expand_target; i++) {
+            void *block = NULL;
+            if (posix_memalign(&block, 64, pool->block_size) == 0) {
+                *(void **)block = pool->free_list;
+                pool->free_list = block;
+                pool->total_blocks++;
+                pool->free_blocks++;
+                actual_added++;
+            } else {
+                /* OOM, stop expansion */
+                break;
+            }
+        }
+        
+        if (actual_added > 0) {
+            LOGINF("[mempool] batch expanded: +%zu blocks (total: %zu/%zu)", 
+                   actual_added, pool->total_blocks, pool->max_blocks);
+        }
+    }
     
-    /* Try to get from free list */
+    /* 3. Standard allocation from free_list */
+    void *block = NULL;
     if (pool->free_list) {
         block = pool->free_list;
         pool->free_list = *(void **)block;
         pool->free_blocks--;
+        pool->alloc_count++;
     } else {
-        /* Free list empty, try dynamic expansion */
-        if (pool->total_blocks < pool->max_blocks) {
-            if (posix_memalign(&block, 64, pool->block_size) == 0) {
-                pool->total_blocks++;
-                LOGINF("[mempool] expanded: %zu/%zu", pool->total_blocks, pool->max_blocks);
-            } else {
-                LOGERR("[mempool] posix_memalign failed during expansion");
-                return NULL;
-            }
-        } else {
-            /* Pool exhausted, return NULL (caller handles this) */
-            LOGWAR("[mempool] pool limit reached (%zu blocks), allocation failed", 
-                   pool->total_blocks);
-            return NULL;
+        /* Pool exhausted or OOM - throttle warning logs */
+        static int warn_counter = 0;
+        if (warn_counter++ % 1000 == 0) {
+            LOGWAR("[mempool] pool exhausted or OOM (%zu/%zu)", 
+                   pool->total_blocks, pool->max_blocks);
         }
     }
     
-    pool->alloc_count++;
     return block;
 }
 

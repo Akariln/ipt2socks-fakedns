@@ -859,8 +859,9 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, evio_t *udp_watcher,
                 close(tproxy_sockfd);
                 continue;
             }
-            tproxyctx = malloc(sizeof(*tproxyctx));
+            tproxyctx = mempool_alloc_sized(g_udp_context_pool, sizeof(*tproxyctx));
             if (!tproxyctx) {
+                LOGERR("[udp_socks5_recv_udpmessage_cb] mempool alloc failed for tproxyctx");
                 close(tproxy_sockfd);
                 continue;
             }
@@ -1040,7 +1041,7 @@ static void udp_tproxy_context_timeout_cb(evloop_t *evloop, evtimer_t *idle_time
 
     ev_timer_stop(evloop, idle_timer);
     close(context->udp_sockfd);
-    free(context);
+    mempool_free_sized(g_udp_context_pool, context, sizeof(*context));
 }
 
 void udp_dns_recv_cb(evloop_t *evloop, evio_t *watcher, int revents) {

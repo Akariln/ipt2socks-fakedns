@@ -1,18 +1,28 @@
 #define _GNU_SOURCE
 #include "lrucache.h"
 
-static uint16_t g_lrucache_maxsize = 256;
+static uint16_t g_main_cache_maxsize  = 256;  /* Main Table: Full Cone NAT */
+static uint16_t g_fork_cache_maxsize  = 256;  /* Fork Table: Symmetric NAT / FakeDNS */
+static uint16_t g_tproxy_cache_maxsize = 256; /* TProxy Table: Response routing */
 
-uint16_t lrucache_get_maxsize(void) {
-    return g_lrucache_maxsize;
-}
+uint16_t lrucache_get_main_maxsize(void) { return g_main_cache_maxsize; }
+uint16_t lrucache_get_fork_maxsize(void) { return g_fork_cache_maxsize; }
+uint16_t lrucache_get_tproxy_maxsize(void) { return g_tproxy_cache_maxsize; }
+
+void lrucache_set_main_maxsize(uint16_t maxsize) { g_main_cache_maxsize = maxsize; }
+void lrucache_set_fork_maxsize(uint16_t maxsize) { g_fork_cache_maxsize = maxsize; }
+void lrucache_set_tproxy_maxsize(uint16_t maxsize) { g_tproxy_cache_maxsize = maxsize; }
+
+/* Convenience: set all caches to the same size */
 void lrucache_set_maxsize(uint16_t maxsize) {
-    g_lrucache_maxsize = maxsize;
+    g_main_cache_maxsize = maxsize;
+    g_fork_cache_maxsize = maxsize;
+    g_tproxy_cache_maxsize = maxsize;
 }
 
 udp_socks5ctx_t* udp_socks5ctx_add(udp_socks5ctx_t **cache, udp_socks5ctx_t *entry) {
     MYHASH_ADD(*cache, entry, &entry->key_ipport, sizeof(entry->key_ipport));
-    if (MYHASH_CNT(*cache) > g_lrucache_maxsize) {
+    if (MYHASH_CNT(*cache) > g_main_cache_maxsize) {
         udp_socks5ctx_t *curentry = NULL, *tmpentry = NULL;
         MYHASH_FOR(*cache, curentry, tmpentry) {
             MYHASH_DEL(*cache, curentry);
@@ -23,7 +33,7 @@ udp_socks5ctx_t* udp_socks5ctx_add(udp_socks5ctx_t **cache, udp_socks5ctx_t *ent
 }
 udp_socks5ctx_t* udp_socks5ctx_fork_add(udp_socks5ctx_t **cache, udp_socks5ctx_t *entry) {
     MYHASH_ADD(*cache, entry, &entry->fork_key, sizeof(entry->fork_key));
-    if (MYHASH_CNT(*cache) > g_lrucache_maxsize) {
+    if (MYHASH_CNT(*cache) > g_fork_cache_maxsize) {
         udp_socks5ctx_t *curentry = NULL, *tmpentry = NULL;
         MYHASH_FOR(*cache, curentry, tmpentry) {
             MYHASH_DEL(*cache, curentry);
@@ -34,7 +44,7 @@ udp_socks5ctx_t* udp_socks5ctx_fork_add(udp_socks5ctx_t **cache, udp_socks5ctx_t
 }
 udp_tproxyctx_t* udp_tproxyctx_add(udp_tproxyctx_t **cache, udp_tproxyctx_t *entry) {
     MYHASH_ADD(*cache, entry, &entry->key_ipport, sizeof(entry->key_ipport));
-    if (MYHASH_CNT(*cache) > g_lrucache_maxsize) {
+    if (MYHASH_CNT(*cache) > g_tproxy_cache_maxsize) {
         udp_tproxyctx_t *curentry = NULL, *tmpentry = NULL;
         MYHASH_FOR(*cache, curentry, tmpentry) {
             MYHASH_DEL(*cache, curentry);
