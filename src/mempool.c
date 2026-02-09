@@ -24,15 +24,17 @@
 #ifndef MIN
 #define MIN(a,b) (((a)<(b))?(a):(b))
 #endif
-
 /* 64-byte block header for cache line alignment */
+#define BLOCK_HEADER_FIXED_SIZE (sizeof(uint32_t) * 2 + sizeof(void *) * 3)
+#define BLOCK_HEADER_PADDING    (CACHELINE_SIZE - BLOCK_HEADER_FIXED_SIZE)
+
 typedef struct block_header {
     uint32_t magic;              /* Magic number for validation */
     uint32_t data_size;          /* Actual data size for this block */
     struct block_header *prev;   /* Doubly linked list: prev */
     struct block_header *next;   /* Doubly linked list: next */
     struct block_header *next_free; /* Free list pointer (pool blocks only) */
-    char padding[32];            /* Pad to 64 bytes: 64 - 4 - 4 - 8*3 = 32 */
+    char padding[BLOCK_HEADER_PADDING]; /* Pad to 64 bytes */
 } block_header_t;
 
 _Static_assert(sizeof(block_header_t) == CACHELINE_SIZE, 
