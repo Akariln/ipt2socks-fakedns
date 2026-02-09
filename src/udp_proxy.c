@@ -287,13 +287,12 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
             LOGINF("[udp_tproxy_recvmsg_cb] try to connect to %s#%hu ...", g_server_ipstr, g_server_portno);
         }
 
-        context = mempool_alloc_sized(g_udp_context_pool, sizeof(*context));
+        context = mempool_calloc_sized(g_udp_context_pool, sizeof(*context));
         if (!context) {
             LOGERR("[udp_tproxy_recvmsg_cb] mempool alloc failed for context");
             close(tcp_sockfd);
             return;
         }
-        memset(context, 0, sizeof(*context));
         memcpy(&context->key_ipport, &key_ipport, sizeof(key_ipport));
 
         // Save original destination and protocol family
@@ -859,7 +858,7 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, evio_t *udp_watcher,
                 close(tproxy_sockfd);
                 continue;
             }
-            tproxyctx = mempool_alloc_sized(g_udp_context_pool, sizeof(*tproxyctx));
+            tproxyctx = mempool_calloc_sized(g_udp_context_pool, sizeof(*tproxyctx));
             if (!tproxyctx) {
                 LOGERR("[udp_socks5_recv_udpmessage_cb] mempool alloc failed for tproxyctx");
                 close(tproxy_sockfd);

@@ -31,12 +31,19 @@ memory_pool_t* mempool_create(size_t block_size, size_t initial_blocks, size_t m
 void* mempool_alloc_sized(memory_pool_t *pool, size_t size);
 
 /**
- * Free memory back to pool with size awareness
- * - If size <= block_size: return to pool
- * - If size > block_size: direct free (was allocated via malloc)
+ * Allocate zeroed memory from pool (like calloc)
+ * Same as mempool_alloc_sized, but memory is zeroed before return
+ * @param pool Memory pool
+ * @param size Requested size in bytes
+ * @return Pointer to zeroed memory, or NULL on failure
+ */
+void* mempool_calloc_sized(memory_pool_t *pool, size_t size);
+
+/**
+ * Free memory back to pool
  * @param pool Memory pool
  * @param block Pointer to memory block
- * @param size Original allocation size
+ * @param size Original allocation size (kept for API compatibility, not used)
  */
 void mempool_free_sized(memory_pool_t *pool, void *block, size_t size);
 
