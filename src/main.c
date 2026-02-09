@@ -13,6 +13,7 @@
 
 #include <arpa/inet.h>
 #include <errno.h>
+#include <limits.h>
 #include <fcntl.h>
 #include <getopt.h>
 #include <netinet/in.h>
@@ -67,6 +68,70 @@ static void print_command_help(void) {
     );
 }
 
+/**
+ * Validate IP address string.
+ * @param ipstr IP address string to validate
+ * @param max_len Maximum allowed length (including null terminator)
+ * @param required_family Required address family (AF_INET, AF_INET6, or -1 for any)
+ * @param opt_name Option name for error messages
+ * @return true if valid, false if invalid (error message printed)
+ */
+static bool validate_ip_address(const char *ipstr, size_t max_len, int required_family, const char *opt_name) {
+    if (strlen(ipstr) + 1 > max_len) {
+        printf("[parse_command_args] %s address max length is %zu: %s\n", opt_name, max_len - 1, ipstr);
+        return false;
+    }
+    int family = get_ipstr_family(ipstr);
+    if (required_family == -1) {
+        if (family == -1) {
+            printf("[parse_command_args] invalid %s ip address: %s\n", opt_name, ipstr);
+            return false;
+        }
+    } else if (family != required_family) {
+        printf("[parse_command_args] invalid %s %s address: %s\n", opt_name, 
+               required_family == AF_INET ? "ipv4" : "ipv6", ipstr);
+        return false;
+    }
+    return true;
+}
+
+/**
+ * Validate and parse port number.
+ * @param portstr Port number string to validate
+ * @param out_port Output port number (set only if valid)
+ * @param opt_name Option name for error messages
+ * @return true if valid, false if invalid (error message printed)
+ */
+static bool validate_port_number(const char *portstr, portno_t *out_port, const char *opt_name) {
+    char *endptr;
+    unsigned long port = strtoul(portstr, &endptr, 10);
+    if (*endptr != '\0' || port == 0 || port > 65535) {
+        printf("[parse_command_args] invalid %s port number: %s\n", opt_name, portstr);
+        return false;
+    }
+    *out_port = (portno_t)port;
+    return true;
+}
+
+/**
+ * Validate and parse unsigned integer within range.
+ * @param valstr Value string to validate
+ * @param max_val Maximum allowed value
+ * @param out_val Output value (set only if valid)
+ * @param opt_name Option name for error messages
+ * @return true if valid, false if invalid (error message printed)
+ */
+static bool validate_uint_range(const char *valstr, unsigned long max_val, unsigned long *out_val, const char *opt_name) {
+    char *endptr;
+    unsigned long val = strtoul(valstr, &endptr, 10);
+    if (*endptr != '\0' || val == 0 || val > max_val) {
+        printf("[parse_command_args] invalid %s: %s\n", opt_name, valstr);
+        return false;
+    }
+    *out_val = val;
+    return true;
+}
+
 static void parse_command_args(int argc, char* argv[]) {
     opterr = 0;
     const char *optstr = ":s:p:a:k:b:B:l:S:c:o:j:n:u:TU46RrwWvVh";
@@ -110,26 +175,14 @@ static void parse_command_args(int argc, char* argv[]) {
     while ((shortopt = getopt_long(argc, argv, optstr, options, NULL)) != -1) {
         switch (shortopt) {
             case 's':
-                if (strlen(optarg) + 1 > IP6STRLEN) {
-                    printf("[parse_command_args] ip address max length is 45: %s\n", optarg);
+                if (!validate_ip_address(optarg, IP6STRLEN, -1, "server"))
                     goto PRINT_HELP_AND_EXIT;
-                }
-                if (get_ipstr_family(optarg) == -1) {
-                    printf("[parse_command_args] invalid server ip address: %s\n", optarg);
-                    goto PRINT_HELP_AND_EXIT;
-                }
                 strcpy(g_server_ipstr, optarg);
                 break;
-            case 'p': {
-                char *endptr;
-                unsigned long port = strtoul(optarg, &endptr, 10);
-                if (*endptr != '\0' || port == 0 || port > 65535) {
-                    printf("[parse_command_args] invalid server port number: %s\n", optarg);
+            case 'p':
+                if (!validate_port_number(optarg, &g_server_portno, "server"))
                     goto PRINT_HELP_AND_EXIT;
-                }
-                g_server_portno = (portno_t)port;
                 break;
-            }
             case 'a':
                 if (strlen(optarg) > SOCKS5_USRPWD_USRMAXLEN) {
                     printf("[parse_command_args] socks5 username max length is 255: %s\n", optarg);
@@ -145,84 +198,51 @@ static void parse_command_args(int argc, char* argv[]) {
                 optval_auth_password = optarg;
                 break;
             case 'b':
-                if (strlen(optarg) + 1 > IP4STRLEN) {
-                    printf("[parse_command_args] ipv4 address max length is 15: %s\n", optarg);
+                if (!validate_ip_address(optarg, IP4STRLEN, AF_INET, "listen"))
                     goto PRINT_HELP_AND_EXIT;
-                }
-                if (get_ipstr_family(optarg) != AF_INET) {
-                    printf("[parse_command_args] invalid listen ipv4 address: %s\n", optarg);
-                    goto PRINT_HELP_AND_EXIT;
-                }
                 strcpy(g_bind_ipstr4, optarg);
                 break;
             case 'B':
-                if (strlen(optarg) + 1 > IP6STRLEN) {
-                    printf("[parse_command_args] ipv6 address max length is 45: %s\n", optarg);
+                if (!validate_ip_address(optarg, IP6STRLEN, AF_INET6, "listen"))
                     goto PRINT_HELP_AND_EXIT;
-                }
-                if (get_ipstr_family(optarg) != AF_INET6) {
-                    printf("[parse_command_args] invalid listen ipv6 address: %s\n", optarg);
-                    goto PRINT_HELP_AND_EXIT;
-                }
                 strcpy(g_bind_ipstr6, optarg);
                 break;
-            case 'l': {
-                char *endptr;
-                unsigned long port = strtoul(optarg, &endptr, 10);
-                if (*endptr != '\0' || port == 0 || port > 65535) {
-                    printf("[parse_command_args] invalid listen port number: %s\n", optarg);
+            case 'l':
+                if (!validate_port_number(optarg, &g_bind_portno, "listen"))
                     goto PRINT_HELP_AND_EXIT;
-                }
-                g_bind_portno = (portno_t)port;
                 break;
-            }
             case 'S': {
-                char *endptr;
-                unsigned long val = strtoul(optarg, &endptr, 10);
-                if (*endptr != '\0' || val == 0 || val > 255) {
-                    printf("[parse_command_args] invalid number of syn retransmits: %s\n", optarg);
+                unsigned long val;
+                if (!validate_uint_range(optarg, 255, &val, "number of syn retransmits"))
                     goto PRINT_HELP_AND_EXIT;
-                }
                 g_tcp_syncnt_max = (uint8_t)val;
                 break;
             }
             case 'c': {
-                char *endptr;
-                unsigned long val = strtoul(optarg, &endptr, 10);
-                if (*endptr != '\0' || val == 0 || val > 65535) {
-                    printf("[parse_command_args] invalid maxsize of udp lrucache: %s\n", optarg);
+                unsigned long val;
+                if (!validate_uint_range(optarg, 65535, &val, "maxsize of udp lrucache"))
                     goto PRINT_HELP_AND_EXIT;
-                }
                 lrucache_set_maxsize((uint16_t)val);
                 break;
             }
             case 'o': {
-                char *endptr;
-                unsigned long val = strtoul(optarg, &endptr, 10);
-                if (*endptr != '\0' || val == 0 || val > 65535) {
-                    printf("[parse_command_args] invalid udp socket idle timeout: %s\n", optarg);
+                unsigned long val;
+                if (!validate_uint_range(optarg, 65535, &val, "udp socket idle timeout"))
                     goto PRINT_HELP_AND_EXIT;
-                }
                 g_udp_idletimeout_sec = (uint16_t)val;
                 break;
             }
             case 'j': {
-                char *endptr;
-                unsigned long val = strtoul(optarg, &endptr, 10);
-                if (*endptr != '\0' || val == 0 || val > 255) {
-                    printf("[parse_command_args] invalid number of worker threads: %s\n", optarg);
+                unsigned long val;
+                if (!validate_uint_range(optarg, 255, &val, "number of worker threads"))
                     goto PRINT_HELP_AND_EXIT;
-                }
                 g_nthreads = (uint8_t)val;
                 break;
             }
             case 'n': {
-                char *endptr;
-                unsigned long val = strtoul(optarg, &endptr, 10);
-                if (*endptr != '\0' || val == 0) {
-                    printf("[parse_command_args] invalid nofile limit: %s\n", optarg);
+                unsigned long val;
+                if (!validate_uint_range(optarg, ULONG_MAX, &val, "nofile limit"))
                     goto PRINT_HELP_AND_EXIT;
-                }
                 set_nofile_limit(val);
                 break;
             }
@@ -281,26 +301,14 @@ static void parse_command_args(int argc, char* argv[]) {
                 g_options |= OPT_ENABLE_FAKEDNS;
                 break;
             case 1002:
-                if (strlen(optarg) + 1 > IP4STRLEN) {
-                    printf("[parse_command_args] fakedns address max length is 15: %s\n", optarg);
+                if (!validate_ip_address(optarg, IP4STRLEN, AF_INET, "fakedns"))
                     goto PRINT_HELP_AND_EXIT;
-                }
-                if (get_ipstr_family(optarg) != AF_INET) {
-                    printf("[parse_command_args] invalid fakedns ipv4 address: %s\n", optarg);
-                    goto PRINT_HELP_AND_EXIT;
-                }
                 strcpy(g_fakedns_ipstr, optarg);
                 break;
-            case 1003: {
-                char *endptr;
-                unsigned long port = strtoul(optarg, &endptr, 10);
-                if (*endptr != '\0' || port == 0 || port > 65535) {
-                    printf("[parse_command_args] invalid fakedns port number: %s\n", optarg);
+            case 1003:
+                if (!validate_port_number(optarg, &g_fakedns_portno, "fakedns"))
                     goto PRINT_HELP_AND_EXIT;
-                }
-                g_fakedns_portno = (portno_t)port;
                 break;
-            }
             case 1004:
                 strncpy(g_fakedns_cidr, optarg, sizeof(g_fakedns_cidr) - 1);
                 g_fakedns_cidr[sizeof(g_fakedns_cidr) - 1] = '\0';
