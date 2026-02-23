@@ -354,7 +354,7 @@ size_t fakedns_process_query(const uint8_t *query, size_t qlen, uint8_t *buffer,
         
         // Construct header and return immediately (NODATA)
         if (offset + 4 > buflen) return 0;
-        memcpy(buffer, query, offset + 4);
+        if (query != buffer) memcpy(buffer, query, offset + 4);
         
         buffer[2] = (resp_flags >> 8) & 0xFF;
         buffer[3] = resp_flags & 0xFF;
@@ -368,7 +368,7 @@ size_t fakedns_process_query(const uint8_t *query, size_t qlen, uint8_t *buffer,
     // Construct buffer
     // Copy Header + Question
     if (offset + 4 > buflen) return 0;
-    memcpy(buffer, query, offset + 4);
+    if (query != buffer) memcpy(buffer, query, offset + 4);
     
     // Update Header
     buffer[2] = (resp_flags >> 8) & 0xFF;

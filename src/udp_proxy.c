@@ -538,7 +538,7 @@ static void udp_socks5_recv_authresp_cb(evloop_t *evloop, evio_t *tcp_watcher, i
         datalen = g_socks5_usrpwd_requestlen;
     } else {
         udp_socks5ctx_t *context = get_udpsk5ctx_by_tcp(tcp_watcher);
-        bool isipv4 = ((socks5_udp4msg_t *)((udp_packet_queue_t *)context->udp_watcher.data)->head->data)->addrtype == SOCKS5_ADDRTYPE_IPV4;
+        bool isipv4 = context->dest_is_ipv4;
         data = isipv4 ? (void *)&G_SOCKS5_UDP4_REQUEST : (void *)&G_SOCKS5_UDP6_REQUEST;
         datalen = isipv4 ? sizeof(socks5_ipv4req_t) : sizeof(socks5_ipv6req_t);
     }
@@ -570,7 +570,7 @@ static void udp_socks5_recv_usrpwdresp_cb(evloop_t *evloop, evio_t *tcp_watcher,
         return;
     }
     udp_socks5ctx_t *context = get_udpsk5ctx_by_tcp(tcp_watcher);
-    bool isipv4 = ((socks5_udp4msg_t *)((udp_packet_queue_t *)context->udp_watcher.data)->head->data)->addrtype == SOCKS5_ADDRTYPE_IPV4;
+    bool isipv4 = context->dest_is_ipv4;
     const void *data = isipv4 ? (void *)&G_SOCKS5_UDP4_REQUEST : (void *)&G_SOCKS5_UDP6_REQUEST;
     uint16_t datalen = isipv4 ? sizeof(socks5_ipv4req_t) : sizeof(socks5_ipv6req_t);
     int ret = udp_socks5_send_request("udp_socks5_recv_usrpwdresp_cb", evloop, tcp_watcher, data, datalen);
@@ -585,7 +585,7 @@ static void udp_socks5_recv_usrpwdresp_cb(evloop_t *evloop, evio_t *tcp_watcher,
 
 static void udp_socks5_send_proxyreq_cb(evloop_t *evloop, evio_t *tcp_watcher, int revents __attribute__((unused))) {
     udp_socks5ctx_t *context = get_udpsk5ctx_by_tcp(tcp_watcher);
-    bool isipv4 = ((socks5_udp4msg_t *)((udp_packet_queue_t *)context->udp_watcher.data)->head->data)->addrtype == SOCKS5_ADDRTYPE_IPV4;
+    bool isipv4 = context->dest_is_ipv4;
     const void *request = isipv4 ? (void *)&G_SOCKS5_UDP4_REQUEST : (void *)&G_SOCKS5_UDP6_REQUEST;
     uint16_t requestlen = isipv4 ? sizeof(socks5_ipv4req_t) : sizeof(socks5_ipv6req_t);
     if (udp_socks5_send_request("udp_socks5_send_proxyreq_cb", evloop, tcp_watcher, request, requestlen) != 1) {
@@ -727,9 +727,9 @@ static void udp_socks5_recv_proxyresp_cb(evloop_t *evloop, evio_t *tcp_watcher, 
 
     ev_timer_again(evloop, &context->idle_timer);
     if (context->is_forked) {
-        udp_socks5ctx_use(&g_udp_fork_table, context);
+        udp_socks5ctx_use(&g_udp_fork_table, context, &context->fork_key, sizeof(context->fork_key));
     } else {
-        udp_socks5ctx_use(&g_udp_socks5ctx_table, context);
+        udp_socks5ctx_use(&g_udp_socks5ctx_table, context, &context->key_ipport, sizeof(context->key_ipport));
     }
 }
 
@@ -989,9 +989,9 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, evio_t *udp_watcher,
     /* Optimization: Update LRU only once per batch */
     if (retval > 0) {
         if (socks5ctx->is_forked) {
-            udp_socks5ctx_use(&g_udp_fork_table, socks5ctx);
+            udp_socks5ctx_use(&g_udp_fork_table, socks5ctx, &socks5ctx->fork_key, sizeof(socks5ctx->fork_key));
         } else {
-            udp_socks5ctx_use(&g_udp_socks5ctx_table, socks5ctx);
+            udp_socks5ctx_use(&g_udp_socks5ctx_table, socks5ctx, &socks5ctx->key_ipport, sizeof(socks5ctx->key_ipport));
         }
         ev_timer_again(evloop, &socks5ctx->idle_timer);
     }

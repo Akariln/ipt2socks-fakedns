@@ -82,13 +82,9 @@ udp_tproxyctx_t* udp_tproxyctx_get(udp_tproxyctx_t **cache, const ip_port_t *key
     return entry;
 }
 
-void udp_socks5ctx_use(udp_socks5ctx_t **cache, udp_socks5ctx_t *entry) {
+void udp_socks5ctx_use(udp_socks5ctx_t **cache, udp_socks5ctx_t *entry, const void *key, size_t key_len) {
     MYHASH_DEL(*cache, entry);
-    if (entry->is_forked) {
-        MYHASH_ADD(*cache, entry, &entry->fork_key, sizeof(entry->fork_key));
-    } else {
-        MYHASH_ADD(*cache, entry, &entry->key_ipport, sizeof(entry->key_ipport));
-    }
+    MYHASH_ADD(*cache, entry, key, key_len);
 }
 void udp_tproxyctx_use(udp_tproxyctx_t **cache, udp_tproxyctx_t *entry) {
     MYHASH_DEL(*cache, entry);

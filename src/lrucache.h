@@ -56,7 +56,7 @@ udp_socks5ctx_t* udp_socks5ctx_get(udp_socks5ctx_t **cache, const ip_port_t *key
 udp_socks5ctx_t* udp_socks5ctx_fork_get(udp_socks5ctx_t **cache, const udp_fork_key_t *keyptr);
 udp_tproxyctx_t* udp_tproxyctx_get(udp_tproxyctx_t **cache, const ip_port_t *keyptr);
 
-void udp_socks5ctx_use(udp_socks5ctx_t **cache, udp_socks5ctx_t *entry);
+void udp_socks5ctx_use(udp_socks5ctx_t **cache, udp_socks5ctx_t *entry, const void *key, size_t key_len);
 void udp_tproxyctx_use(udp_tproxyctx_t **cache, udp_tproxyctx_t *entry);
 
 void udp_socks5ctx_del(udp_socks5ctx_t **cache, udp_socks5ctx_t *entry);
