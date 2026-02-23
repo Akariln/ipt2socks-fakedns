@@ -3,13 +3,13 @@
 #include <stdarg.h>
 
 static __thread char g_log_time_str[32] = "0000-00-00 00:00:00";
-static __thread atomic_long g_log_time_epoch = 0;
+static __thread long g_log_time_epoch = 0;
 
 static inline void update_log_time(void) {
     time_t now = time(NULL);
     /* Only update when seconds change (avoid repeated conversion) */
-    if (now != atomic_load_explicit(&g_log_time_epoch, memory_order_relaxed)) {
-        atomic_store_explicit(&g_log_time_epoch, now, memory_order_relaxed);
+    if (now != g_log_time_epoch) {
+        g_log_time_epoch = now;
         struct tm tm;
         localtime_r(&now, &tm);
         snprintf(g_log_time_str, sizeof(g_log_time_str),
