@@ -20,67 +20,51 @@ void lrucache_set_maxsize(uint16_t maxsize) {
     g_tproxy_cache_maxsize = maxsize;
 }
 
-udp_socks5ctx_t* udp_socks5ctx_add(udp_socks5ctx_t **cache, udp_socks5ctx_t *entry) {
-    MYHASH_ADD(*cache, entry, &entry->key_ipport, sizeof(entry->key_ipport));
-    if (MYHASH_CNT(*cache) > g_main_cache_maxsize) {
-        udp_socks5ctx_t *curentry = NULL, *tmpentry = NULL;
-        MYHASH_FOR(*cache, curentry, tmpentry) {
-            MYHASH_DEL(*cache, curentry);
-            return curentry;
-        }
-    }
-    return NULL;
-}
-udp_socks5ctx_t* udp_socks5ctx_fork_add(udp_socks5ctx_t **cache, udp_socks5ctx_t *entry) {
-    MYHASH_ADD(*cache, entry, &entry->fork_key, sizeof(entry->fork_key));
-    if (MYHASH_CNT(*cache) > g_fork_cache_maxsize) {
-        udp_socks5ctx_t *curentry = NULL, *tmpentry = NULL;
-        MYHASH_FOR(*cache, curentry, tmpentry) {
-            MYHASH_DEL(*cache, curentry);
-            return curentry;
-        }
-    }
-    return NULL;
-}
-udp_tproxyctx_t* udp_tproxyctx_add(udp_tproxyctx_t **cache, udp_tproxyctx_t *entry) {
-    MYHASH_ADD(*cache, entry, &entry->key_ipport, sizeof(entry->key_ipport));
-    if (MYHASH_CNT(*cache) > g_tproxy_cache_maxsize) {
-        udp_tproxyctx_t *curentry = NULL, *tmpentry = NULL;
-        MYHASH_FOR(*cache, curentry, tmpentry) {
-            MYHASH_DEL(*cache, curentry);
-            return curentry;
-        }
-    }
-    return NULL;
+/* ── LRU operation templates ── */
+
+#define DEFINE_LRU_ADD(func_name, type, key_field, maxsize_var)              \
+type* func_name(type **cache, type *entry) {                                 \
+    MYHASH_ADD(*cache, entry, &entry->key_field, sizeof(entry->key_field));   \
+    if (MYHASH_CNT(*cache) > maxsize_var) {                                  \
+        type *cur = NULL, *tmp = NULL;                                       \
+        MYHASH_FOR(*cache, cur, tmp) {                                       \
+            MYHASH_DEL(*cache, cur);                                         \
+            return cur; /* evict the oldest (LRU) entry */                    \
+        }                                                                    \
+    }                                                                        \
+    return NULL;                                                             \
 }
 
-udp_socks5ctx_t* udp_socks5ctx_get(udp_socks5ctx_t **cache, const ip_port_t *keyptr) {
-    udp_socks5ctx_t *entry = NULL;
-    MYHASH_GET(*cache, entry, keyptr, sizeof(ip_port_t));
-    if (entry) {
-        MYHASH_DEL(*cache, entry);
-        MYHASH_ADD(*cache, entry, &entry->key_ipport, sizeof(entry->key_ipport));
-    }
-    return entry;
+#define DEFINE_LRU_GET(func_name, type, key_type, key_field)                 \
+type* func_name(type **cache, const key_type *keyptr) {                      \
+    type *entry = NULL;                                                      \
+    MYHASH_GET(*cache, entry, keyptr, sizeof(key_type));                      \
+    if (entry) {                                                             \
+        MYHASH_DEL(*cache, entry);                                           \
+        MYHASH_ADD(*cache, entry, &entry->key_field, sizeof(entry->key_field)); \
+    }                                                                        \
+    return entry;                                                            \
 }
-udp_socks5ctx_t* udp_socks5ctx_fork_get(udp_socks5ctx_t **cache, const udp_fork_key_t *keyptr) {
-    udp_socks5ctx_t *entry = NULL;
-    MYHASH_GET(*cache, entry, keyptr, sizeof(udp_fork_key_t));
-    if (entry) {
-        MYHASH_DEL(*cache, entry);
-        MYHASH_ADD(*cache, entry, &entry->fork_key, sizeof(entry->fork_key));
-    }
-    return entry;
+
+#define DEFINE_LRU_DEL(func_name, type)                                      \
+void func_name(type **cache, type *entry) {                                  \
+    MYHASH_DEL(*cache, entry);                                               \
 }
-udp_tproxyctx_t* udp_tproxyctx_get(udp_tproxyctx_t **cache, const ip_port_t *keyptr) {
-    udp_tproxyctx_t *entry = NULL;
-    MYHASH_GET(*cache, entry, keyptr, sizeof(ip_port_t));
-    if (entry) {
-        MYHASH_DEL(*cache, entry);
-        MYHASH_ADD(*cache, entry, &entry->key_ipport, sizeof(entry->key_ipport));
-    }
-    return entry;
-}
+
+/* ── Instantiations ── */
+
+DEFINE_LRU_ADD(udp_socks5ctx_add,      udp_socks5ctx_t, key_ipport, g_main_cache_maxsize)
+DEFINE_LRU_ADD(udp_socks5ctx_fork_add, udp_socks5ctx_t, fork_key,   g_fork_cache_maxsize)
+DEFINE_LRU_ADD(udp_tproxyctx_add,      udp_tproxyctx_t, key_ipport, g_tproxy_cache_maxsize)
+
+DEFINE_LRU_GET(udp_socks5ctx_get,      udp_socks5ctx_t, ip_port_t,      key_ipport)
+DEFINE_LRU_GET(udp_socks5ctx_fork_get, udp_socks5ctx_t, udp_fork_key_t, fork_key)
+DEFINE_LRU_GET(udp_tproxyctx_get,      udp_tproxyctx_t, ip_port_t,      key_ipport)
+
+DEFINE_LRU_DEL(udp_socks5ctx_del,      udp_socks5ctx_t)
+DEFINE_LRU_DEL(udp_tproxyctx_del,      udp_tproxyctx_t)
+
+/* ── use: kept as regular functions (already minimal / have unique signatures) ── */
 
 void udp_socks5ctx_use(udp_socks5ctx_t **cache, udp_socks5ctx_t *entry, const void *key, size_t key_len) {
     MYHASH_DEL(*cache, entry);
@@ -89,11 +73,4 @@ void udp_socks5ctx_use(udp_socks5ctx_t **cache, udp_socks5ctx_t *entry, const vo
 void udp_tproxyctx_use(udp_tproxyctx_t **cache, udp_tproxyctx_t *entry) {
     MYHASH_DEL(*cache, entry);
     MYHASH_ADD(*cache, entry, &entry->key_ipport, sizeof(entry->key_ipport));
-}
-
-void udp_socks5ctx_del(udp_socks5ctx_t **cache, udp_socks5ctx_t *entry) {
-    MYHASH_DEL(*cache, entry);
-}
-void udp_tproxyctx_del(udp_tproxyctx_t **cache, udp_tproxyctx_t *entry) {
-    MYHASH_DEL(*cache, entry);
 }
