@@ -14,47 +14,49 @@
 #include <grp.h>
 
 #ifndef PATH_MAX
-  #define PATH_MAX 4096
+#define PATH_MAX 4096
 #endif
 
 #ifndef SO_REUSEPORT
-  #define SO_REUSEPORT 15
+#define SO_REUSEPORT 15
 #endif
 
 #ifndef TCP_FASTOPEN
-  #define TCP_FASTOPEN 23
+#define TCP_FASTOPEN 23
 #endif
 
 #ifndef MSG_FASTOPEN
-  #define MSG_FASTOPEN 0x20000000
+#define MSG_FASTOPEN 0x20000000
 #endif
 
 #ifndef IP_TRANSPARENT
-  #define IP_TRANSPARENT 19
+#define IP_TRANSPARENT 19
 #endif
 
 #ifndef IPV6_TRANSPARENT
-  #define IPV6_TRANSPARENT 75
+#define IPV6_TRANSPARENT 75
 #endif
 
 #ifndef IP_RECVORIGDSTADDR
-  #define IP_RECVORIGDSTADDR 20
+#define IP_RECVORIGDSTADDR 20
 #endif
 
 #ifndef IPV6_RECVORIGDSTADDR
-  #define IPV6_RECVORIGDSTADDR 74
+#define IPV6_RECVORIGDSTADDR 74
 #endif
 
 #ifndef SO_ORIGINAL_DST
-  #define SO_ORIGINAL_DST 80
+#define SO_ORIGINAL_DST 80
 #endif
 
 #ifndef IP6T_SO_ORIGINAL_DST
-  #define IP6T_SO_ORIGINAL_DST 80
+#define IP6T_SO_ORIGINAL_DST 80
 #endif
 
 void set_nofile_limit(size_t nofile) {
-    if (setrlimit(RLIMIT_NOFILE, &(struct rlimit){nofile, nofile}) < 0) {
+    if (setrlimit(RLIMIT_NOFILE, &(struct rlimit) {
+    nofile, nofile
+}) < 0) {
         LOGERR("[set_nofile_limit] setrlimit(nofile, %zu): %s", nofile, strerror(errno));
     }
 }
@@ -160,25 +162,33 @@ static inline void set_non_block(int sockfd) {
 }
 
 static inline void set_ipv6_only(int sockfd) {
-    if (setsockopt(sockfd, IPPROTO_IPV6, IPV6_V6ONLY, &(int){1}, sizeof(int)) < 0) {
+    if (setsockopt(sockfd, IPPROTO_IPV6, IPV6_V6ONLY, &(int) {
+    1
+}, sizeof(int)) < 0) {
         LOGERR("[set_ipv6_only] setsockopt(%d, IPV6_V6ONLY): %s", sockfd, strerror(errno));
     }
 }
 
 static inline void set_reuse_addr(int sockfd) {
-    if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &(int){1}, sizeof(int)) < 0) {
+    if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &(int) {
+    1
+}, sizeof(int)) < 0) {
         LOGERR("[set_reuse_addr] setsockopt(%d, SO_REUSEADDR): %s", sockfd, strerror(errno));
     }
 }
 
 static inline void set_reuse_port(int sockfd) {
-    if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEPORT, &(int){1}, sizeof(int)) < 0) {
+    if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEPORT, &(int) {
+    1
+}, sizeof(int)) < 0) {
         LOGERR("[set_reuse_port] setsockopt(%d, SO_REUSEPORT): %s", sockfd, strerror(errno));
     }
 }
 
 static inline void set_tfo_accept(int sockfd) {
-    if (setsockopt(sockfd, IPPROTO_TCP, TCP_FASTOPEN, &(int){5}, sizeof(int)) < 0) {
+    if (setsockopt(sockfd, IPPROTO_TCP, TCP_FASTOPEN, &(int) {
+    5
+}, sizeof(int)) < 0) {
         LOGERR("[set_tfo_accept] setsockopt(%d, TCP_FASTOPEN): %s", sockfd, strerror(errno));
     }
 }
@@ -190,41 +200,55 @@ static inline void set_tcp_syncnt(int sockfd, int syncnt) {
 }
 
 static inline void set_tcp_nodelay(int sockfd) {
-    if (setsockopt(sockfd, IPPROTO_TCP, TCP_NODELAY, &(int){1}, sizeof(int)) < 0) {
+    if (setsockopt(sockfd, IPPROTO_TCP, TCP_NODELAY, &(int) {
+    1
+}, sizeof(int)) < 0) {
         LOGERR("[set_tcp_nodelay] setsockopt(%d, TCP_NODELAY): %s", sockfd, strerror(errno));
     }
 }
 
 static inline void set_tcp_quickack(int sockfd) {
-    if (setsockopt(sockfd, IPPROTO_TCP, TCP_QUICKACK, &(int){1}, sizeof(int)) < 0) {
+    if (setsockopt(sockfd, IPPROTO_TCP, TCP_QUICKACK, &(int) {
+    1
+}, sizeof(int)) < 0) {
         LOGERR("[set_tcp_quickack] setsockopt(%d, TCP_QUICKACK): %s", sockfd, strerror(errno));
     }
 }
 
 static inline void set_tcp_solinger0(int sockfd) {
-    if (setsockopt(sockfd, SOL_SOCKET, SO_LINGER, &(struct linger){.l_onoff = 1, .l_linger = 0}, sizeof(struct linger)) < 0) {
+    if (setsockopt(sockfd, SOL_SOCKET, SO_LINGER, &(struct linger) {
+    .l_onoff = 1, .l_linger = 0
+}, sizeof(struct linger)) < 0) {
         LOGERR("[set_tcp_solinger0] setsockopt(%d, SO_LINGER): %s", sockfd, strerror(errno));
     }
 }
 
 static inline void set_tcp_keepalive(int sockfd) {
     /* enable tcp_keepalive */
-    if (setsockopt(sockfd, SOL_SOCKET, SO_KEEPALIVE, &(int){1}, sizeof(int)) < 0) {
+    if (setsockopt(sockfd, SOL_SOCKET, SO_KEEPALIVE, &(int) {
+    1
+}, sizeof(int)) < 0) {
         LOGERR("[set_tcp_keepalive] setsockopt(%d, SO_KEEPALIVE): %s", sockfd, strerror(errno));
         return;
     }
     /* tcp connection idle sec */
-    if (setsockopt(sockfd, IPPROTO_TCP, TCP_KEEPIDLE, &(int){60}, sizeof(int)) < 0) {
+    if (setsockopt(sockfd, IPPROTO_TCP, TCP_KEEPIDLE, &(int) {
+    60
+}, sizeof(int)) < 0) {
         LOGERR("[set_tcp_keepalive] setsockopt(%d, TCP_KEEPIDLE): %s", sockfd, strerror(errno));
         return;
     }
     /* keepalive probe retry max count */
-    if (setsockopt(sockfd, IPPROTO_TCP, TCP_KEEPCNT, &(int){3}, sizeof(int)) < 0) {
+    if (setsockopt(sockfd, IPPROTO_TCP, TCP_KEEPCNT, &(int) {
+    3
+}, sizeof(int)) < 0) {
         LOGERR("[set_tcp_keepalive] setsockopt(%d, TCP_KEEPCNT): %s", sockfd, strerror(errno));
         return;
     }
     /* keepalive probe retry interval sec */
-    if (setsockopt(sockfd, IPPROTO_TCP, TCP_KEEPINTVL, &(int){5}, sizeof(int)) < 0) {
+    if (setsockopt(sockfd, IPPROTO_TCP, TCP_KEEPINTVL, &(int) {
+    5
+}, sizeof(int)) < 0) {
         LOGERR("[set_tcp_keepalive] setsockopt(%d, TCP_KEEPINTVL): %s", sockfd, strerror(errno));
         return;
     }
@@ -232,12 +256,16 @@ static inline void set_tcp_keepalive(int sockfd) {
 
 static inline void set_ip_transparent(int family, int sockfd) {
     if (family == AF_INET) {
-        if (setsockopt(sockfd, IPPROTO_IP, IP_TRANSPARENT, &(int){1}, sizeof(int)) < 0) {
+        if (setsockopt(sockfd, IPPROTO_IP, IP_TRANSPARENT, &(int) {
+        1
+    }, sizeof(int)) < 0) {
             LOGERR("[set_ip_transparent] setsockopt(%d, IP_TRANSPARENT): %s", sockfd, strerror(errno));
             return;
         }
     } else {
-        if (setsockopt(sockfd, IPPROTO_IPV6, IPV6_TRANSPARENT, &(int){1}, sizeof(int)) < 0) {
+        if (setsockopt(sockfd, IPPROTO_IPV6, IPV6_TRANSPARENT, &(int) {
+        1
+    }, sizeof(int)) < 0) {
             LOGERR("[set_ip_transparent] setsockopt(%d, IPV6_TRANSPARENT): %s", sockfd, strerror(errno));
             return;
         }
@@ -246,12 +274,16 @@ static inline void set_ip_transparent(int family, int sockfd) {
 
 static inline void set_recv_origdstaddr(int family, int sockfd) {
     if (family == AF_INET) {
-        if (setsockopt(sockfd, IPPROTO_IP, IP_RECVORIGDSTADDR, &(int){1}, sizeof(int)) < 0) {
+        if (setsockopt(sockfd, IPPROTO_IP, IP_RECVORIGDSTADDR, &(int) {
+        1
+    }, sizeof(int)) < 0) {
             LOGERR("[set_recv_origdstaddr] setsockopt(%d, IP_RECVORIGDSTADDR): %s", sockfd, strerror(errno));
             return;
         }
     } else {
-        if (setsockopt(sockfd, IPPROTO_IPV6, IPV6_RECVORIGDSTADDR, &(int){1}, sizeof(int)) < 0) {
+        if (setsockopt(sockfd, IPPROTO_IPV6, IPV6_RECVORIGDSTADDR, &(int) {
+        1
+    }, sizeof(int)) < 0) {
             LOGERR("[set_recv_origdstaddr] setsockopt(%d, IPV6_RECVORIGDSTADDR): %s", sockfd, strerror(errno));
             return;
         }
@@ -388,7 +420,9 @@ bool tcp_connect(int sockfd, const void *addr, const void *tfo_data, size_t tfo_
 
 /* on connect error, errno is set appropriately */
 bool tcp_has_error(int sockfd) {
-    return getsockopt(sockfd, SOL_SOCKET, SO_ERROR, &errno, &(socklen_t){sizeof(errno)}) < 0 || errno;
+    return getsockopt(sockfd, SOL_SOCKET, SO_ERROR, &errno, &(socklen_t) {
+        sizeof(errno)
+    }) < 0 || errno;
 }
 
 /* set so_linger(delay=0) and call close(sockfd) */

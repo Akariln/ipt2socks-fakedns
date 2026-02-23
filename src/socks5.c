@@ -72,7 +72,7 @@ void socks5_proxy_request_make(void *request, const void *skaddr, const char *do
             port = ((skaddr6_t *)skaddr)->sin6_port;
         }
         memcpy(dreq->domain_str + dreq->domain_len, &port, 2);
-        
+
         if (reqlen) *reqlen = sizeof(socks5_domainreq_t) + dreq->domain_len + 2;
     } else if (((skaddr4_t *)skaddr)->sin_family == AF_INET) {
         const skaddr4_t *addr = skaddr;
@@ -92,15 +92,24 @@ void socks5_proxy_request_make(void *request, const void *skaddr, const char *do
 
 static inline const char* socks5_rcode2string(uint8_t rcode) {
     switch (rcode) {
-        case SOCKS5_RESPCODE_SUCCEEDED: return "Succeeded";
-        case SOCKS5_RESPCODE_SVRGENERR: return "General server failure";
-        case SOCKS5_RESPCODE_NOTALLOWED: return "Not allowed by ruleset";
-        case SOCKS5_RESPCODE_NETUNREACH: return "Network unreachable";
-        case SOCKS5_RESPCODE_HOSTUNREACH: return "Host unreachable";
-        case SOCKS5_RESPCODE_CONNREFUSED: return "Connection refused";
-        case SOCKS5_RESPCODE_TTLEXPIRED: return "TTL expired";
-        case SOCKS5_RESPCODE_COMMANDNOTSPT: return "Command not supported";
-        case SOCKS5_RESPCODE_ADDRTYPENOTSPT: return "Address type not supported";
+        case SOCKS5_RESPCODE_SUCCEEDED:
+            return "Succeeded";
+        case SOCKS5_RESPCODE_SVRGENERR:
+            return "General server failure";
+        case SOCKS5_RESPCODE_NOTALLOWED:
+            return "Not allowed by ruleset";
+        case SOCKS5_RESPCODE_NETUNREACH:
+            return "Network unreachable";
+        case SOCKS5_RESPCODE_HOSTUNREACH:
+            return "Host unreachable";
+        case SOCKS5_RESPCODE_CONNREFUSED:
+            return "Connection refused";
+        case SOCKS5_RESPCODE_TTLEXPIRED:
+            return "TTL expired";
+        case SOCKS5_RESPCODE_COMMANDNOTSPT:
+            return "Command not supported";
+        case SOCKS5_RESPCODE_ADDRTYPENOTSPT:
+            return "Address type not supported";
     }
     return "Unknown response code";
 }

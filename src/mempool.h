@@ -10,9 +10,9 @@ typedef struct memory_pool memory_pool_t;
 
 /**
  * Create a memory pool with fixed block size
- * 
+ *
  * THREAD-SAFETY: NOT thread-safe. Use __thread pools in multi-threaded code.
- * 
+ *
  * @param block_size Size of each block in bytes
  * @param initial_blocks Number of blocks to pre-allocate
  * @param max_blocks Maximum blocks allowed (0 = unlimited)
@@ -62,8 +62,8 @@ size_t mempool_destroy(memory_pool_t *pool);
  * @param alloc_count Output: total allocations
  * @param free_count Output: total frees
  */
-void mempool_get_stats(memory_pool_t *pool, size_t *total_blocks, 
-                       size_t *free_blocks, size_t *alloc_count, 
+void mempool_get_stats(memory_pool_t *pool, size_t *total_blocks,
+                       size_t *free_blocks, size_t *alloc_count,
                        size_t *free_count);
 
 #endif /* IPT2SOCKS_MEMPOOL_H */

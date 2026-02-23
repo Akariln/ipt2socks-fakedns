@@ -16,15 +16,15 @@
 
 /* splice() api */
 #ifndef SPLICE_F_MOVE
-  #include <sys/syscall.h>
+#include <sys/syscall.h>
 
-  #undef  SPLICE_F_MOVE
-  #define SPLICE_F_MOVE 1
+#undef  SPLICE_F_MOVE
+#define SPLICE_F_MOVE 1
 
-  #undef  SPLICE_F_NONBLOCK
-  #define SPLICE_F_NONBLOCK 2
+#undef  SPLICE_F_NONBLOCK
+#define SPLICE_F_NONBLOCK 2
 
-  #define splice(fdin, offin, fdout, offout, len, flags) syscall(__NR_splice, fdin, offin, fdout, offout, len, flags)
+#define splice(fdin, offin, fdout, offout, len, flags) syscall(__NR_splice, fdin, offin, fdout, offout, len, flags)
 #endif
 
 /* Forward declarations */
@@ -63,12 +63,12 @@ static inline void tcp_context_release(evloop_t *evloop, tcp_context_t *context,
     if (context->client_pipefd[1] != -1) close(context->client_pipefd[1]);
     if (context->socks5_pipefd[0] != -1) close(context->socks5_pipefd[0]);
     if (context->socks5_pipefd[1] != -1) close(context->socks5_pipefd[1]);
-    
+
     /* Remove from session list */
     if (context->next) context->next->prev = context->prev;
     if (context->prev) context->prev->next = context->next;
     else g_tcp_session_head = context->next;
-    
+
     mempool_free_sized(g_tcp_context_pool, context, sizeof(tcp_context_t));
 }
 
@@ -84,9 +84,13 @@ void tcp_proxy_close_all_sessions(evloop_t *evloop) {
 
 void tcp_tproxy_accept_cb(evloop_t *evloop, evio_t *accept_watcher, int revents __attribute__((unused))) {
     bool isipv4 = accept_watcher->data;
-    skaddr6_t skaddr; char ipstr[IP6STRLEN]; portno_t portno;
+    skaddr6_t skaddr;
+    char ipstr[IP6STRLEN];
+    portno_t portno;
 
-    int client_sockfd = tcp_accept(accept_watcher->fd, (void *)&skaddr, &(socklen_t){sizeof(skaddr)});
+    int client_sockfd = tcp_accept(accept_watcher->fd, (void *)&skaddr, &(socklen_t) {
+        sizeof(skaddr)
+    });
     if (client_sockfd < 0) {
         if (errno != EAGAIN && errno != EWOULDBLOCK) {
             LOGERR("[tcp_tproxy_accept_cb] accept tcp%s socket: %s", isipv4 ? "4" : "6", strerror(errno));
@@ -114,10 +118,10 @@ void tcp_tproxy_accept_cb(evloop_t *evloop, evio_t *accept_watcher, int revents 
         if (fakedns_reverse_lookup(((skaddr4_t *)&skaddr)->sin_addr.s_addr, domain_buf, sizeof(domain_buf))) {
             fake_domain = domain_buf;
             LOGINF("[tcp_tproxy_accept_cb] fakedns hit: %u.%u.%u.%u -> %s",
-                ((uint8_t *)&skaddr)[4], ((uint8_t *)&skaddr)[5], ((uint8_t *)&skaddr)[6], ((uint8_t *)&skaddr)[7], fake_domain);
+                   ((uint8_t *)&skaddr)[4], ((uint8_t *)&skaddr)[5], ((uint8_t *)&skaddr)[6], ((uint8_t *)&skaddr)[7], fake_domain);
         } else {
             LOGERR("[tcp_tproxy_accept_cb] fakedns miss for FakeIP: %u.%u.%u.%u, dropping connection",
-                ((uint8_t *)&skaddr)[4], ((uint8_t *)&skaddr)[5], ((uint8_t *)&skaddr)[6], ((uint8_t *)&skaddr)[7]);
+                   ((uint8_t *)&skaddr)[4], ((uint8_t *)&skaddr)[5], ((uint8_t *)&skaddr)[6], ((uint8_t *)&skaddr)[7]);
             tcp_close_by_rst(client_sockfd);
             return;
         }
@@ -149,7 +153,7 @@ void tcp_tproxy_accept_cb(evloop_t *evloop, evio_t *accept_watcher, int revents 
     }
     context->client_pipefd[0] = context->client_pipefd[1] = -1;
     context->socks5_pipefd[0] = context->socks5_pipefd[1] = -1;
-    
+
     /* Add to session list (prepend) */
     context->prev = NULL;
     context->next = (tcp_context_t *)g_tcp_session_head;
@@ -163,7 +167,7 @@ void tcp_tproxy_accept_cb(evloop_t *evloop, evio_t *accept_watcher, int revents 
     /* build the ipv4/ipv6 proxy request (send to the socks5 proxy server) */
     /* Use embedded buffer for request (offset 0) */
     context->client_watcher.data = context->handshake_buf;
-    
+
     size_t actual_len = 0;
     socks5_proxy_request_make(context->client_watcher.data, &skaddr, fake_domain, &actual_len);
     context->client_length = actual_len;
@@ -317,12 +321,12 @@ static void tcp_socks5_recv_proxyresp_cb(evloop_t *evloop, evio_t *socks5_watche
     if (tcp_socks5_recv_response("tcp_socks5_recv_proxyresp_cb", evloop, socks5_watcher, socks5_watcher->data, context->client_length) != 1) {
         return;
     }
-    
+
     /* If we just read the first 5 bytes (Header prefix) */
     if (context->client_length == 5) {
         uint8_t atype = ((socks5_ipv4resp_t *)socks5_watcher->data)->addrtype;
         size_t total_len;
-        
+
         if (atype == SOCKS5_ADDRTYPE_IPV4) {
             total_len = sizeof(socks5_ipv4resp_t); // 10
         } else if (atype == SOCKS5_ADDRTYPE_IPV6) {
@@ -330,33 +334,33 @@ static void tcp_socks5_recv_proxyresp_cb(evloop_t *evloop, evio_t *socks5_watche
         } else if (atype == SOCKS5_ADDRTYPE_DOMAIN) {
             uint8_t domain_len = ((socks5_domainresp_t *)socks5_watcher->data)->domain_len;
             if (domain_len == 0 || domain_len > 253) {
-                 LOGERR("[tcp_socks5_recv_proxyresp_cb] invalid domain_len: %u", domain_len);
-                 tcp_context_release(evloop, context, true);
-                 return;
+                LOGERR("[tcp_socks5_recv_proxyresp_cb] invalid domain_len: %u", domain_len);
+                tcp_context_release(evloop, context, true);
+                return;
             }
             total_len = sizeof(socks5_domainresp_t) + domain_len + 2;
         } else {
-             LOGERR("[tcp_socks5_recv_proxyresp_cb] unsupported address type: 0x%02x", atype);
-             tcp_context_release(evloop, context, true);
-             return;
+            LOGERR("[tcp_socks5_recv_proxyresp_cb] unsupported address type: 0x%02x", atype);
+            tcp_context_release(evloop, context, true);
+            return;
         }
-        
+
         /* Ensure buffer size for big domain */
         if (total_len > 300) {
-              LOGERR("[tcp_socks5_recv_proxyresp_cb] response too large: %zu", total_len);
-              tcp_context_release(evloop, context, true);
-              return;
+            LOGERR("[tcp_socks5_recv_proxyresp_cb] response too large: %zu", total_len);
+            tcp_context_release(evloop, context, true);
+            return;
         }
 
         if (total_len > 5) {
             /* We are using embedded buffer, no realloc needed as we reserved 300 bytes.
              * context->socks5_watcher.data already points to handshake_buf + 300.
              */
-            
+
             /* Update length targets */
             context->client_length = total_len;
             context->socks5_length = 5; /* We already have 5 bytes */
-            
+
             /* Attempt to read the rest immediately */
             if (tcp_socks5_recv_response("tcp_socks5_recv_proxyresp_cb", evloop, socks5_watcher, socks5_watcher->data, context->client_length) != 1) {
                 return;
@@ -370,7 +374,7 @@ static void tcp_socks5_recv_proxyresp_cb(evloop_t *evloop, evio_t *socks5_watche
     }
 
     context->client_length = 0;
-    
+
     // ... remainder of function ...
 
     socks5_watcher->data = NULL;

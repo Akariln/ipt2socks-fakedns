@@ -65,7 +65,7 @@ static void print_command_help(void) {
            "     --fakedns-port <port>          fakedns listen port, default: 5353\n"
            "     --fakedns-ip-range <cidr>      fakedns ip range, default: 198.18.0.0/15\n"
            "     --fakedns-cache <path>         fakedns cache file path, support persistence\n"
-    );
+          );
 }
 
 /**
@@ -88,7 +88,7 @@ static bool validate_ip_address(const char *ipstr, size_t max_len, int required_
             return false;
         }
     } else if (family != required_family) {
-        printf("[parse_command_args] invalid %s %s address: %s\n", opt_name, 
+        printf("[parse_command_args] invalid %s %s address: %s\n", opt_name,
                required_family == AF_INET ? "ipv4" : "ipv6", ipstr);
         return false;
     }
@@ -212,40 +212,40 @@ static void parse_command_args(int argc, char* argv[]) {
                     goto PRINT_HELP_AND_EXIT;
                 break;
             case 'S': {
-                unsigned long val;
-                if (!validate_uint_range(optarg, 255, &val, "number of syn retransmits"))
-                    goto PRINT_HELP_AND_EXIT;
-                g_tcp_syncnt_max = (uint8_t)val;
-                break;
-            }
+                    unsigned long val;
+                    if (!validate_uint_range(optarg, 255, &val, "number of syn retransmits"))
+                        goto PRINT_HELP_AND_EXIT;
+                    g_tcp_syncnt_max = (uint8_t)val;
+                    break;
+                }
             case 'c': {
-                unsigned long val;
-                if (!validate_uint_range(optarg, 65535, &val, "maxsize of udp lrucache"))
-                    goto PRINT_HELP_AND_EXIT;
-                lrucache_set_maxsize((uint16_t)val);
-                break;
-            }
+                    unsigned long val;
+                    if (!validate_uint_range(optarg, 65535, &val, "maxsize of udp lrucache"))
+                        goto PRINT_HELP_AND_EXIT;
+                    lrucache_set_maxsize((uint16_t)val);
+                    break;
+                }
             case 'o': {
-                unsigned long val;
-                if (!validate_uint_range(optarg, 65535, &val, "udp socket idle timeout"))
-                    goto PRINT_HELP_AND_EXIT;
-                g_udp_idletimeout_sec = (uint16_t)val;
-                break;
-            }
+                    unsigned long val;
+                    if (!validate_uint_range(optarg, 65535, &val, "udp socket idle timeout"))
+                        goto PRINT_HELP_AND_EXIT;
+                    g_udp_idletimeout_sec = (uint16_t)val;
+                    break;
+                }
             case 'j': {
-                unsigned long val;
-                if (!validate_uint_range(optarg, 255, &val, "number of worker threads"))
-                    goto PRINT_HELP_AND_EXIT;
-                g_nthreads = (uint8_t)val;
-                break;
-            }
+                    unsigned long val;
+                    if (!validate_uint_range(optarg, 255, &val, "number of worker threads"))
+                        goto PRINT_HELP_AND_EXIT;
+                    g_nthreads = (uint8_t)val;
+                    break;
+                }
             case 'n': {
-                unsigned long val;
-                if (!validate_uint_range(optarg, ULONG_MAX, &val, "nofile limit"))
-                    goto PRINT_HELP_AND_EXIT;
-                set_nofile_limit(val);
-                break;
-            }
+                    unsigned long val;
+                    if (!validate_uint_range(optarg, ULONG_MAX, &val, "nofile limit"))
+                        goto PRINT_HELP_AND_EXIT;
+                    set_nofile_limit(val);
+                    break;
+                }
             case 'u':
                 run_as_user(optarg, argv);
                 break;
@@ -370,7 +370,7 @@ int main(int argc, char* argv[]) {
     if (g_options & OPT_ENABLE_IPV4) LOG_ALWAYS_INF("[main] listen address: %s#%hu", g_bind_ipstr4, g_bind_portno);
     if (g_options & OPT_ENABLE_IPV6) LOG_ALWAYS_INF("[main] listen address: %s#%hu", g_bind_ipstr6, g_bind_portno);
     if (g_tcp_syncnt_max) LOG_ALWAYS_INF("[main] max number of syn retries: %hhu", g_tcp_syncnt_max);
-    LOG_ALWAYS_INF("[main] udp cache capacity: main=%hu fork=%hu tproxy=%hu", 
+    LOG_ALWAYS_INF("[main] udp cache capacity: main=%hu fork=%hu tproxy=%hu",
                    lrucache_get_main_maxsize(), lrucache_get_fork_maxsize(), lrucache_get_tproxy_maxsize());
     LOG_ALWAYS_INF("[main] udp session idle timeout: %hu", g_udp_idletimeout_sec);
     LOG_ALWAYS_INF("[main] number of worker threads: %hhu", g_nthreads);
@@ -386,8 +386,8 @@ int main(int argc, char* argv[]) {
         LOG_ALWAYS_INF("[main] fakedns listen address: %s#%hu", g_fakedns_ipstr, g_fakedns_portno);
         fakedns_init(g_fakedns_cidr);
         if (g_fakedns_cache_path[0]) {
-             LOG_ALWAYS_INF("[main] fakedns cache path: %s", g_fakedns_cache_path);
-             fakedns_load(g_fakedns_cache_path);
+            LOG_ALWAYS_INF("[main] fakedns cache path: %s", g_fakedns_cache_path);
+            fakedns_load(g_fakedns_cache_path);
         }
     }
     LOGINF("[main] verbose mode (affect performance)");
@@ -422,14 +422,14 @@ static void on_signal_read(evloop_t *loop, evio_t *watcher, int revents __attrib
     if (s != sizeof(struct signalfd_siginfo)) return;
 
     LOG_ALWAYS_INF("[on_signal_read] caught signal %d, stopping...", fdsi.ssi_signo);
-    
+
     // Notify all worker threads to exit
     for (int i = 0; i < g_thread_count; i++) {
         if (g_threads[i].evloop) {
             ev_async_send(g_threads[i].evloop, &g_threads[i].exit_watcher);
         }
     }
-    
+
     ev_break(loop, EVBREAK_ALL);
 }
 
@@ -441,9 +441,9 @@ static void on_async_exit(evloop_t *loop, ev_async *watcher __attribute__((unuse
 static void* run_event_loop(void *arg) {
     thread_info_t *thread_info = (thread_info_t *)arg;
     bool is_main_thread = (thread_info == NULL);
-    
+
     evloop_t *evloop = ev_loop_new(0);
-    
+
     /* Resource tracking for cleanup */
     int exit_code = 0;
     int signalfd_fd = -1;
@@ -453,7 +453,7 @@ static void* run_event_loop(void *arg) {
     int tcp4_sockfd = -1, tcp6_sockfd = -1;
     int udp4_sockfd = -1, udp6_sockfd = -1;
     int fakedns_sockfd = -1;
-    
+
     // Register async watcher for worker threads to receive exit notification
     if (!is_main_thread) {
         thread_info->evloop = evloop;
@@ -463,19 +463,19 @@ static void* run_event_loop(void *arg) {
 
     /* Initialize memory pools (thread-local) */
     /* Context pool serves: Main table + Fork table + TProxy table */
-    size_t cache_size = lrucache_get_main_maxsize() 
-                      + lrucache_get_fork_maxsize()
-                      + lrucache_get_tproxy_maxsize();
+    size_t cache_size = lrucache_get_main_maxsize()
+                        + lrucache_get_fork_maxsize()
+                        + lrucache_get_tproxy_maxsize();
     size_t initial_blocks = cache_size;
-    
+
     if (initial_blocks < MEMPOOL_INITIAL_SIZE) initial_blocks = MEMPOOL_INITIAL_SIZE;
-    
+
     /* 1. Packet Pool (variable-sized, high limit for throughput) */
     g_udp_packet_pool = mempool_create(
-        MEMPOOL_BLOCK_SIZE, 
-        initial_blocks, 
-        65536
-    );
+                            MEMPOOL_BLOCK_SIZE,
+                            initial_blocks,
+                            65536
+                        );
     if (!g_udp_packet_pool) {
         LOGERR("[run_event_loop] failed to create packet memory pool");
         exit_code = 1;
@@ -483,25 +483,25 @@ static void* run_event_loop(void *arg) {
     }
 
     /* 2. UDP Context Pool: serves udp_socks5ctx_t (264 bytes) and udp_tproxyctx_t (120 bytes)
-     * Block size = max(sizeof(udp_socks5ctx_t), sizeof(udp_tproxyctx_t)) 
+     * Block size = max(sizeof(udp_socks5ctx_t), sizeof(udp_tproxyctx_t))
      * Note: udp_tproxyctx_t wastes ~54% per allocation, acceptable for reduced fragmentation */
     g_udp_context_pool = mempool_create(
-        sizeof(udp_socks5ctx_t),  /* 264 bytes (larger of the two) */
-        initial_blocks, 
-        initial_blocks * 2
-    );
+                             sizeof(udp_socks5ctx_t),  /* 264 bytes (larger of the two) */
+                             initial_blocks,
+                             initial_blocks * 2
+                         );
     if (!g_udp_context_pool) {
         LOGERR("[run_event_loop] failed to create context memory pool");
         exit_code = 1;
         goto cleanup;
     }
-    
+
     /* TCP Context Pool */
     g_tcp_context_pool = mempool_create(
-        sizeof(tcp_context_t),
-        128,
-        0
-    );
+                             sizeof(tcp_context_t),
+                             128,
+                             0
+                         );
     if (!g_tcp_context_pool) {
         LOGERR("[run_event_loop] failed to create tcp context memory pool");
         exit_code = 1;
@@ -509,22 +509,22 @@ static void* run_event_loop(void *arg) {
     }
 
     if (is_main_thread) {
-         sigset_t mask;
-         sigemptyset(&mask);
-         sigaddset(&mask, SIGINT);
-         sigaddset(&mask, SIGTERM);
-         signalfd_fd = signalfd(-1, &mask, SFD_NONBLOCK | SFD_CLOEXEC);
-         if (signalfd_fd < 0) {
-             LOGERR("[run_event_loop] signalfd: %s", strerror(errno));
-             exit_code = errno;
-             goto cleanup;
-         }
-         
-         static evio_t signal_watcher;
-         ev_io_init(&signal_watcher, on_signal_read, signalfd_fd, EV_READ);
-         ev_io_start(evloop, &signal_watcher);
+        sigset_t mask;
+        sigemptyset(&mask);
+        sigaddset(&mask, SIGINT);
+        sigaddset(&mask, SIGTERM);
+        signalfd_fd = signalfd(-1, &mask, SFD_NONBLOCK | SFD_CLOEXEC);
+        if (signalfd_fd < 0) {
+            LOGERR("[run_event_loop] signalfd: %s", strerror(errno));
+            exit_code = errno;
+            goto cleanup;
+        }
+
+        static evio_t signal_watcher;
+        ev_io_init(&signal_watcher, on_signal_read, signalfd_fd, EV_READ);
+        ev_io_start(evloop, &signal_watcher);
     }
-    
+
     if (g_options & OPT_ENABLE_TCP) {
         bool is_tproxy = !(g_options & OPT_TCP_USE_REDIRECT);
         bool is_tfo_accept = g_options & OPT_ENABLE_TFO_ACCEPT;
@@ -646,24 +646,62 @@ static void* run_event_loop(void *arg) {
 
 cleanup:
     /* 1. Stop all IO watchers to prevent events during cleanup */
-    if (tcp4_watcher) { ev_io_stop(evloop, tcp4_watcher); free(tcp4_watcher); tcp4_watcher = NULL; }
-    if (tcp6_watcher) { ev_io_stop(evloop, tcp6_watcher); free(tcp6_watcher); tcp6_watcher = NULL; }
-    if (udp4_watcher) { ev_io_stop(evloop, udp4_watcher); free(udp4_watcher); udp4_watcher = NULL; }
-    if (udp6_watcher) { ev_io_stop(evloop, udp6_watcher); free(udp6_watcher); udp6_watcher = NULL; }
-    if (fakedns_watcher) { ev_io_stop(evloop, fakedns_watcher); free(fakedns_watcher); fakedns_watcher = NULL; }
-    
+    if (tcp4_watcher) {
+        ev_io_stop(evloop, tcp4_watcher);
+        free(tcp4_watcher);
+        tcp4_watcher = NULL;
+    }
+    if (tcp6_watcher) {
+        ev_io_stop(evloop, tcp6_watcher);
+        free(tcp6_watcher);
+        tcp6_watcher = NULL;
+    }
+    if (udp4_watcher) {
+        ev_io_stop(evloop, udp4_watcher);
+        free(udp4_watcher);
+        udp4_watcher = NULL;
+    }
+    if (udp6_watcher) {
+        ev_io_stop(evloop, udp6_watcher);
+        free(udp6_watcher);
+        udp6_watcher = NULL;
+    }
+    if (fakedns_watcher) {
+        ev_io_stop(evloop, fakedns_watcher);
+        free(fakedns_watcher);
+        fakedns_watcher = NULL;
+    }
+
     /* 2. Close sockets */
-    if (tcp4_sockfd >= 0) { close(tcp4_sockfd); tcp4_sockfd = -1; }
-    if (tcp6_sockfd >= 0) { close(tcp6_sockfd); tcp6_sockfd = -1; }
-    if (udp4_sockfd >= 0) { close(udp4_sockfd); udp4_sockfd = -1; }
-    if (udp6_sockfd >= 0) { close(udp6_sockfd); udp6_sockfd = -1; }
-    if (fakedns_sockfd >= 0) { close(fakedns_sockfd); fakedns_sockfd = -1; }
-    if (signalfd_fd >= 0) { close(signalfd_fd); signalfd_fd = -1; }
-    
+    if (tcp4_sockfd >= 0) {
+        close(tcp4_sockfd);
+        tcp4_sockfd = -1;
+    }
+    if (tcp6_sockfd >= 0) {
+        close(tcp6_sockfd);
+        tcp6_sockfd = -1;
+    }
+    if (udp4_sockfd >= 0) {
+        close(udp4_sockfd);
+        udp4_sockfd = -1;
+    }
+    if (udp6_sockfd >= 0) {
+        close(udp6_sockfd);
+        udp6_sockfd = -1;
+    }
+    if (fakedns_sockfd >= 0) {
+        close(fakedns_sockfd);
+        fakedns_sockfd = -1;
+    }
+    if (signalfd_fd >= 0) {
+        close(signalfd_fd);
+        signalfd_fd = -1;
+    }
+
     /* 3. Return all active sessions to pools */
     if (g_options & OPT_ENABLE_UDP) udp_proxy_close_all_sessions(evloop);
     if (g_options & OPT_ENABLE_TCP) tcp_proxy_close_all_sessions(evloop);
-    
+
     /* 4. Destroy memory pools */
     if (g_udp_packet_pool) {
         size_t leaks = mempool_destroy(g_udp_packet_pool);
@@ -680,10 +718,10 @@ cleanup:
         if (leaks > 0) LOGERR("[run_event_loop] tcp context pool leaks: %zu", leaks);
         g_tcp_context_pool = NULL;
     }
-    
+
     /* 5. Destroy event loop */
     if (evloop) ev_loop_destroy(evloop);
-    
+
     if (exit_code != 0) exit(exit_code);
     return NULL;
 }

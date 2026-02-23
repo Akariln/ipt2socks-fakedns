@@ -21,10 +21,10 @@ static inline void update_log_time(void) {
 
 void log_print(log_level_t level, const char *fmt, ...) {
     update_log_time();
-    
+
     const char *color = "";
     const char *label = "";
-    
+
     switch (level) {
         case LOG_LEVEL_INF:
         case LOG_LEVEL_ALWAYS_INF:
