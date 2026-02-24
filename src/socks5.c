@@ -1,8 +1,6 @@
 #define _GNU_SOURCE
 #include "socks5.h"
 #include "logutils.h"
-#include <stdbool.h>
-#include <stdint.h>
 #include <string.h>
 
 socks5_authreq_t g_socks5_auth_request = {

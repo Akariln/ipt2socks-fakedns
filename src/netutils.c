@@ -6,7 +6,6 @@
 #include <errno.h>
 #include <unistd.h>
 #include <fcntl.h>
-#include <sys/types.h>
 #include <arpa/inet.h>
 #include <netinet/tcp.h>
 #include <sys/resource.h>

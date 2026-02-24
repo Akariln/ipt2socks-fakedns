@@ -11,8 +11,6 @@
 #include <errno.h>
 #include <string.h>
 #include <sys/socket.h>
-#include <fcntl.h>
-#include <arpa/inet.h>
 
 /* splice() api */
 #ifndef SPLICE_F_MOVE
