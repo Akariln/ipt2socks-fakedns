@@ -443,12 +443,14 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
         LOGERR("[udp_tproxy_recvmsg_cb] send to %s#%hu: %s", ipstr, portno, strerror(errno));
         return;
     }
-    if (fake_domain) {
-        portno = ntohs(((skaddr4_t *)&skaddr)->sin_port);
-        LOGINF("[udp_tproxy_recvmsg_cb] send to %s#%hu, nsend:%zd", fake_domain, portno, nrecv);
-    } else {
-        parse_socket_addr(&skaddr, ipstr, &portno);
-        LOGINF("[udp_tproxy_recvmsg_cb] send to %s#%hu, nsend:%zd", ipstr, portno, nrecv);
+    IF_VERBOSE {
+        if (fake_domain) {
+            portno = ntohs(((skaddr4_t *)&skaddr)->sin_port);
+            LOGINF("[udp_tproxy_recvmsg_cb] send to %s#%hu, nsend:%zd", fake_domain, portno, nrecv);
+        } else {
+            parse_socket_addr(&skaddr, ipstr, &portno);
+            LOGINF("[udp_tproxy_recvmsg_cb] send to %s#%hu, nsend:%zd", ipstr, portno, nrecv);
+        }
     }
 }
 
@@ -686,7 +688,7 @@ static void udp_socks5_recv_proxyresp_cb(evloop_t *evloop, evio_t *tcp_watcher, 
     udp_packet_node_t *curr = queue->head;
     while (curr) {
         ssize_t nsend = send(udp_sockfd, curr->data, curr->len, 0);
-        if (nsend < 0 || g_verbose) {
+        if (nsend < 0 || unlikely(g_verbose)) {
             char ipstr[260];
             portno_t portno;
             uint8_t addrtype = ((socks5_udp4msg_t *)curr->data)->addrtype;
