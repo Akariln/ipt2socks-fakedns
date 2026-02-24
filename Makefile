@@ -6,7 +6,7 @@ CFLAGS = -std=c99 -Wall -Wextra -Wvla -pthread -O3 -flto=auto \
          -fno-strict-aliasing -ffunction-sections -fdata-sections \
          -DNDEBUG -MMD -MP $(EXTRA_CFLAGS)
 
-LDFLAGS = -pthread -O3 -flto=auto -fno-strict-aliasing -Wl,--gc-sections -s $(EXTRA_LDFLAGS)
+LDFLAGS = -pthread -O3 -flto=auto -Wl,--gc-sections -s $(EXTRA_LDFLAGS)
 
 LDLIBS = -lm
 
@@ -19,7 +19,7 @@ DEPS = $(SRCS:.c=.d)
 
 MAIN = ipt2socks
 
-.PHONY: all install clean static musl-static
+.PHONY: all install clean static musl-static debug
 
 all: $(MAIN)
 
@@ -28,6 +28,9 @@ $(MAIN): $(OBJS)
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
+
+libev/ev.o: libev/ev.c
+	$(CC) $(CFLAGS) -w -c $< -o $@
 
 install: $(MAIN)
 	mkdir -p $(DESTDIR)$(BINDIR)
@@ -42,5 +45,13 @@ static: $(OBJS)
 musl-static:
 	$(MAKE) clean
 	$(MAKE) CC=musl-gcc static
+
+debug:
+	$(MAKE) clean
+	$(MAKE) CFLAGS="-std=c99 -Wall -Wextra -Wvla -pthread -O0 -g \
+		-fno-strict-aliasing -MMD -MP -DENABLE_SENDTO_LOG \
+		-fsanitize=address,undefined $(EXTRA_CFLAGS)" \
+		LDFLAGS="-pthread -g -fsanitize=address,undefined $(EXTRA_LDFLAGS)" \
+		all
 
 -include $(DEPS)
