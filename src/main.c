@@ -11,28 +11,24 @@
 
 #include "../libev/ev.h"
 
-#include <arpa/inet.h>
 #include <errno.h>
 #include <limits.h>
-#include <fcntl.h>
 #include <getopt.h>
-#include <netinet/in.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdbool.h>
-#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/signalfd.h>
 #include <sys/socket.h>
-#include <sys/types.h>
 #include <unistd.h>
 
 #define IPT2SOCKS_VERSION "ipt2socks original <https://github.com/zfl9/ipt2socks>\nipt2socks-fakedns v1.1.7 <https://github.com/wyzhou-com/ipt2socks-fakedns>"
 
 static void* run_event_loop(void *is_main_thread);
+static void on_async_exit(evloop_t *loop, ev_async *watcher __attribute__((unused)), int revents __attribute__((unused)));
 
 static void print_command_help(void) {
     printf("usage: ipt2socks <options...>. the existing options are as follows:\n"
@@ -392,14 +388,42 @@ int main(int argc, char* argv[]) {
     }
     LOGINF("[main] verbose mode (affect performance)");
 
+    int started_threads = 0;
     g_thread_count = g_nthreads - 1;
     for (int i = 0; i < g_thread_count; ++i) {
+        g_threads[i].evloop = ev_loop_new(0);
+        if (!g_threads[i].evloop) {
+            LOGERR("[main] ev_loop_new failed for thread %d", i);
+            goto THREAD_INIT_FAIL;
+        }
+        ev_async_init(&g_threads[i].exit_watcher, on_async_exit);
+        ev_async_start(g_threads[i].evloop, &g_threads[i].exit_watcher);
+
         int ret = pthread_create(&g_threads[i].thread_id, NULL, run_event_loop, &g_threads[i]);
         if (ret != 0) {
             LOGERR("[main] create worker thread: %s", strerror(ret));
-            return ret;
+            /* Destroy the unused evloop for this failed thread */
+            ev_async_stop(g_threads[i].evloop, &g_threads[i].exit_watcher);
+            ev_loop_destroy(g_threads[i].evloop);
+            g_threads[i].evloop = NULL;
+            goto THREAD_INIT_FAIL;
         }
+        started_threads++;
     }
+    goto THREAD_INIT_OK;
+
+THREAD_INIT_FAIL:
+    /* Notify already-started threads to exit, then join them */
+    g_thread_count = started_threads;
+    for (int j = 0; j < g_thread_count; j++) {
+        ev_async_send(g_threads[j].evloop, &g_threads[j].exit_watcher);
+    }
+    for (int j = 0; j < g_thread_count; j++) {
+        pthread_join(g_threads[j].thread_id, NULL);
+    }
+    return 1;
+
+THREAD_INIT_OK:
     run_event_loop(NULL);  // main thread passes NULL
 
     // Wait for all worker threads to exit
@@ -438,28 +462,83 @@ static void on_async_exit(evloop_t *loop, ev_async *watcher __attribute__((unuse
     ev_break(loop, EVBREAK_ALL);
 }
 
+/* Listen endpoint descriptor for unified socket setup/cleanup */
+typedef struct {
+    int        *sockfd;
+    evio_t    **watcher;
+    int          family;     /* AF_INET / AF_INET6 */
+    bool         is_tcp;
+    const void  *bind_addr;
+    socklen_t    bind_len;
+    void       (*callback)(evloop_t *, evio_t *, int);
+    const char  *tag;        /* for log messages */
+} listen_endpoint_t;
+
+static int setup_listen_endpoint(evloop_t *evloop, const listen_endpoint_t *ep,
+                                 bool is_tproxy, bool is_reuse_port, bool is_tfo_accept) {
+    int sockfd;
+    if (ep->is_tcp) {
+        sockfd = new_tcp_listen_sockfd(ep->family, is_tproxy, is_reuse_port, is_tfo_accept);
+    } else {
+        sockfd = new_udp_tprecv_sockfd(ep->family, is_reuse_port);
+    }
+    if (sockfd < 0) return errno;
+
+    if (bind(sockfd, ep->bind_addr, ep->bind_len) < 0) {
+        int saved_errno = errno;
+        LOGERR("[run_event_loop] bind %s address: %s", ep->tag, strerror(saved_errno));
+        close(sockfd);
+        return saved_errno;
+    }
+    if (ep->is_tcp && listen(sockfd, SOMAXCONN) < 0) {
+        int saved_errno = errno;
+        LOGERR("[run_event_loop] listen %s socket: %s", ep->tag, strerror(saved_errno));
+        close(sockfd);
+        return saved_errno;
+    }
+
+    evio_t *watcher = malloc(sizeof(*watcher));
+    if (!watcher) {
+        LOGERR("[run_event_loop] malloc %s_watcher failed", ep->tag);
+        close(sockfd);
+        return ENOMEM;
+    }
+    watcher->data = (ep->family == AF_INET) ? (void *)(intptr_t)1 : NULL;
+    ev_io_init(watcher, ep->callback, sockfd, EV_READ);
+    ev_io_start(evloop, watcher);
+
+    *ep->sockfd = sockfd;
+    *ep->watcher = watcher;
+    return 0;
+}
+
+static void cleanup_endpoint(evloop_t *evloop, evio_t **watcher, int *sockfd) {
+    if (*watcher) {
+        ev_io_stop(evloop, *watcher);
+        free(*watcher);
+        *watcher = NULL;
+    }
+    if (*sockfd >= 0) {
+        close(*sockfd);
+        *sockfd = -1;
+    }
+}
+
 static void* run_event_loop(void *arg) {
     thread_info_t *thread_info = (thread_info_t *)arg;
     bool is_main_thread = (thread_info == NULL);
 
-    evloop_t *evloop = ev_loop_new(0);
+    evloop_t *evloop = is_main_thread ? ev_loop_new(0) : thread_info->evloop;
 
     /* Resource tracking for cleanup */
     int exit_code = 0;
     int signalfd_fd = -1;
-    evio_t *tcp4_watcher = NULL, *tcp6_watcher = NULL;
-    evio_t *udp4_watcher = NULL, *udp6_watcher = NULL;
+    evio_t signal_watcher;
+    bool   signal_watcher_started = false;
+    evio_t *watchers[4] = {NULL, NULL, NULL, NULL};  /* tcp4, tcp6, udp4, udp6 */
+    int     sockfds[4]  = {-1, -1, -1, -1};
     evio_t *fakedns_watcher = NULL;
-    int tcp4_sockfd = -1, tcp6_sockfd = -1;
-    int udp4_sockfd = -1, udp6_sockfd = -1;
-    int fakedns_sockfd = -1;
-
-    // Register async watcher for worker threads to receive exit notification
-    if (!is_main_thread) {
-        thread_info->evloop = evloop;
-        ev_async_init(&thread_info->exit_watcher, on_async_exit);
-        ev_async_start(evloop, &thread_info->exit_watcher);
-    }
+    int     fakedns_sockfd = -1;
 
     /* Initialize memory pools (thread-local) */
     /* Context pool serves: Main table + Fork table + TProxy table */
@@ -520,113 +599,44 @@ static void* run_event_loop(void *arg) {
             goto cleanup;
         }
 
-        static evio_t signal_watcher;
         ev_io_init(&signal_watcher, on_signal_read, signalfd_fd, EV_READ);
         ev_io_start(evloop, &signal_watcher);
+        signal_watcher_started = true;
     }
 
-    if (g_options & OPT_ENABLE_TCP) {
-        bool is_tproxy = !(g_options & OPT_TCP_USE_REDIRECT);
-        bool is_tfo_accept = g_options & OPT_ENABLE_TFO_ACCEPT;
-        bool is_reuse_port = g_nthreads > 1 || (g_options & OPT_ALWAYS_REUSE_PORT);
+    /* Endpoint indices: 0=tcp4, 1=tcp6, 2=udp4, 3=udp6 */
+    enum { EP_TCP4 = 0, EP_TCP6, EP_UDP4, EP_UDP6, EP_COUNT };
 
-        if (g_options & OPT_ENABLE_IPV4) {
-            tcp4_sockfd = new_tcp_listen_sockfd(AF_INET, is_tproxy, is_reuse_port, is_tfo_accept);
+    listen_endpoint_t endpoints[EP_COUNT] = {
+        [EP_TCP4] = { &sockfds[0], &watchers[0], AF_INET,  true,  &g_bind_skaddr4, sizeof(skaddr4_t), tcp_tproxy_accept_cb,  "tcp4" },
+        [EP_TCP6] = { &sockfds[1], &watchers[1], AF_INET6, true,  &g_bind_skaddr6, sizeof(skaddr6_t), tcp_tproxy_accept_cb,  "tcp6" },
+        [EP_UDP4] = { &sockfds[2], &watchers[2], AF_INET,  false, &g_bind_skaddr4, sizeof(skaddr4_t), udp_tproxy_recvmsg_cb, "udp4" },
+        [EP_UDP6] = { &sockfds[3], &watchers[3], AF_INET6, false, &g_bind_skaddr6, sizeof(skaddr6_t), udp_tproxy_recvmsg_cb, "udp6" },
+    };
 
-            if (bind(tcp4_sockfd, (void *)&g_bind_skaddr4, sizeof(skaddr4_t)) < 0) {
-                LOGERR("[run_event_loop] bind tcp4 address: %s", strerror(errno));
-                exit_code = errno;
-                goto cleanup;
-            }
-            if (listen(tcp4_sockfd, SOMAXCONN) < 0) {
-                LOGERR("[run_event_loop] listen tcp4 socket: %s", strerror(errno));
-                exit_code = errno;
-                goto cleanup;
-            }
+    bool ep_enabled[EP_COUNT] = {
+        [EP_TCP4] = (g_options & OPT_ENABLE_TCP) && (g_options & OPT_ENABLE_IPV4),
+        [EP_TCP6] = (g_options & OPT_ENABLE_TCP) && (g_options & OPT_ENABLE_IPV6),
+        [EP_UDP4] = (g_options & OPT_ENABLE_UDP) && (g_options & OPT_ENABLE_IPV4),
+        [EP_UDP6] = (g_options & OPT_ENABLE_UDP) && (g_options & OPT_ENABLE_IPV6),
+    };
 
-            tcp4_watcher = malloc(sizeof(*tcp4_watcher));
-            if (!tcp4_watcher) {
-                LOGERR("[run_event_loop] malloc tcp4_watcher failed");
-                exit_code = ENOMEM;
-                goto cleanup;
-            }
-            tcp4_watcher->data = (void *)1;
-            ev_io_init(tcp4_watcher, tcp_tproxy_accept_cb, tcp4_sockfd, EV_READ);
-            ev_io_start(evloop, tcp4_watcher);
-        }
+    bool is_tproxy = !(g_options & OPT_TCP_USE_REDIRECT);
+    bool is_tfo_accept = g_options & OPT_ENABLE_TFO_ACCEPT;
+    bool is_reuse_port = g_nthreads > 1 || (g_options & OPT_ALWAYS_REUSE_PORT);
 
-        if (g_options & OPT_ENABLE_IPV6) {
-            tcp6_sockfd = new_tcp_listen_sockfd(AF_INET6, is_tproxy, is_reuse_port, is_tfo_accept);
-
-            if (bind(tcp6_sockfd, (void *)&g_bind_skaddr6, sizeof(skaddr6_t)) < 0) {
-                LOGERR("[run_event_loop] bind tcp6 address: %s", strerror(errno));
-                exit_code = errno;
-                goto cleanup;
-            }
-            if (listen(tcp6_sockfd, SOMAXCONN) < 0) {
-                LOGERR("[run_event_loop] listen tcp6 socket: %s", strerror(errno));
-                exit_code = errno;
-                goto cleanup;
-            }
-
-            tcp6_watcher = malloc(sizeof(*tcp6_watcher));
-            if (!tcp6_watcher) {
-                LOGERR("[run_event_loop] malloc tcp6_watcher failed");
-                exit_code = ENOMEM;
-                goto cleanup;
-            }
-            tcp6_watcher->data = NULL;
-            ev_io_init(tcp6_watcher, tcp_tproxy_accept_cb, tcp6_sockfd, EV_READ);
-            ev_io_start(evloop, tcp6_watcher);
-        }
-    }
-
-    if (g_options & OPT_ENABLE_UDP) {
-        bool is_reuse_port = g_nthreads > 1 || (g_options & OPT_ALWAYS_REUSE_PORT);
-
-        if (g_options & OPT_ENABLE_IPV4) {
-            udp4_sockfd = new_udp_tprecv_sockfd(AF_INET, is_reuse_port);
-
-            if (bind(udp4_sockfd, (void *)&g_bind_skaddr4, sizeof(skaddr4_t)) < 0) {
-                LOGERR("[run_event_loop] bind udp4 address: %s", strerror(errno));
-                exit_code = errno;
-                goto cleanup;
-            }
-
-            udp4_watcher = malloc(sizeof(*udp4_watcher));
-            if (!udp4_watcher) {
-                LOGERR("[run_event_loop] malloc udp4_watcher failed");
-                exit_code = ENOMEM;
-                goto cleanup;
-            }
-            udp4_watcher->data = (void *)1;
-            ev_io_init(udp4_watcher, udp_tproxy_recvmsg_cb, udp4_sockfd, EV_READ);
-            ev_io_start(evloop, udp4_watcher);
-        }
-
-        if (g_options & OPT_ENABLE_IPV6) {
-            udp6_sockfd = new_udp_tprecv_sockfd(AF_INET6, is_reuse_port);
-
-            if (bind(udp6_sockfd, (void *)&g_bind_skaddr6, sizeof(skaddr6_t)) < 0) {
-                LOGERR("[run_event_loop] bind udp6 address: %s", strerror(errno));
-                exit_code = errno;
-                goto cleanup;
-            }
-
-            udp6_watcher = malloc(sizeof(*udp6_watcher));
-            if (!udp6_watcher) {
-                LOGERR("[run_event_loop] malloc udp6_watcher failed");
-                exit_code = ENOMEM;
-                goto cleanup;
-            }
-            udp6_watcher->data = NULL;
-            ev_io_init(udp6_watcher, udp_tproxy_recvmsg_cb, udp6_sockfd, EV_READ);
-            ev_io_start(evloop, udp6_watcher);
-        }
+    for (int i = 0; i < EP_COUNT; i++) {
+        if (!ep_enabled[i]) continue;
+        exit_code = setup_listen_endpoint(evloop, &endpoints[i], is_tproxy, is_reuse_port, is_tfo_accept);
+        if (exit_code) goto cleanup;
     }
 
     if ((g_options & OPT_ENABLE_FAKEDNS) && is_main_thread) {
         fakedns_sockfd = new_udp_normal_sockfd(AF_INET);
+        if (fakedns_sockfd < 0) {
+            exit_code = errno;
+            goto cleanup;
+        }
         if (bind(fakedns_sockfd, (void *)&g_fakedns_skaddr, sizeof(skaddr4_t)) < 0) {
             LOGERR("[run_event_loop] bind fakedns address: %s", strerror(errno));
             exit_code = errno;
@@ -645,64 +655,25 @@ static void* run_event_loop(void *arg) {
     ev_run(evloop, 0);
 
 cleanup:
-    /* 1. Stop all IO watchers to prevent events during cleanup */
-    if (tcp4_watcher) {
-        ev_io_stop(evloop, tcp4_watcher);
-        free(tcp4_watcher);
-        tcp4_watcher = NULL;
+    /* 1. Stop watchers and close sockets */
+    for (int i = 0; i < EP_COUNT; i++) {
+        cleanup_endpoint(evloop, &watchers[i], &sockfds[i]);
     }
-    if (tcp6_watcher) {
-        ev_io_stop(evloop, tcp6_watcher);
-        free(tcp6_watcher);
-        tcp6_watcher = NULL;
-    }
-    if (udp4_watcher) {
-        ev_io_stop(evloop, udp4_watcher);
-        free(udp4_watcher);
-        udp4_watcher = NULL;
-    }
-    if (udp6_watcher) {
-        ev_io_stop(evloop, udp6_watcher);
-        free(udp6_watcher);
-        udp6_watcher = NULL;
-    }
-    if (fakedns_watcher) {
-        ev_io_stop(evloop, fakedns_watcher);
-        free(fakedns_watcher);
-        fakedns_watcher = NULL;
-    }
-
-    /* 2. Close sockets */
-    if (tcp4_sockfd >= 0) {
-        close(tcp4_sockfd);
-        tcp4_sockfd = -1;
-    }
-    if (tcp6_sockfd >= 0) {
-        close(tcp6_sockfd);
-        tcp6_sockfd = -1;
-    }
-    if (udp4_sockfd >= 0) {
-        close(udp4_sockfd);
-        udp4_sockfd = -1;
-    }
-    if (udp6_sockfd >= 0) {
-        close(udp6_sockfd);
-        udp6_sockfd = -1;
-    }
-    if (fakedns_sockfd >= 0) {
-        close(fakedns_sockfd);
-        fakedns_sockfd = -1;
+    cleanup_endpoint(evloop, &fakedns_watcher, &fakedns_sockfd);
+    if (signal_watcher_started) {
+        ev_io_stop(evloop, &signal_watcher);
+        signal_watcher_started = false;
     }
     if (signalfd_fd >= 0) {
         close(signalfd_fd);
         signalfd_fd = -1;
     }
 
-    /* 3. Return all active sessions to pools */
+    /* 2. Return all active sessions to pools */
     if (g_options & OPT_ENABLE_UDP) udp_proxy_close_all_sessions(evloop);
     if (g_options & OPT_ENABLE_TCP) tcp_proxy_close_all_sessions(evloop);
 
-    /* 4. Destroy memory pools */
+    /* 3. Destroy memory pools */
     if (g_udp_packet_pool) {
         size_t leaks = mempool_destroy(g_udp_packet_pool);
         if (leaks > 0) LOGERR("[run_event_loop] packet pool leaks: %zu", leaks);
@@ -719,7 +690,7 @@ cleanup:
         g_tcp_context_pool = NULL;
     }
 
-    /* 5. Destroy event loop */
+    /* 4. Destroy event loop */
     if (evloop) ev_loop_destroy(evloop);
 
     if (exit_code != 0) exit(exit_code);
