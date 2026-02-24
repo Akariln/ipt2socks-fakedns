@@ -668,6 +668,10 @@ cleanup:
         close(signalfd_fd);
         signalfd_fd = -1;
     }
+    /* Stop exit_watcher for worker threads before destroying the event loop */
+    if (!is_main_thread) {
+        ev_async_stop(evloop, &thread_info->exit_watcher);
+    }
 
     /* 2. Return all active sessions to pools */
     if (g_options & OPT_ENABLE_UDP) udp_proxy_close_all_sessions(evloop);
@@ -690,9 +694,21 @@ cleanup:
         g_tcp_context_pool = NULL;
     }
 
-    /* 4. Destroy event loop */
-    if (evloop) ev_loop_destroy(evloop);
+    /* 4. Destroy event loop and clear global pointer to prevent dangling access */
+    if (evloop) {
+        ev_loop_destroy(evloop);
+        if (!is_main_thread) {
+            thread_info->evloop = NULL;
+        }
+    }
 
-    if (exit_code != 0) exit(exit_code);
+    if (exit_code != 0) {
+        if (is_main_thread) {
+            exit(exit_code);
+        } else {
+            LOGERR("[run_event_loop] worker thread failed (code=%d), requesting shutdown", exit_code);
+            kill(getpid(), SIGTERM);
+        }
+    }
     return NULL;
 }
