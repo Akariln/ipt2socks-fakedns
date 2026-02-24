@@ -25,7 +25,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-#define IPT2SOCKS_VERSION "ipt2socks original <https://github.com/zfl9/ipt2socks>\nipt2socks-fakedns v1.1.7 <https://github.com/wyzhou-com/ipt2socks-fakedns>"
+#define IPT2SOCKS_VERSION "ipt2socks original <https://github.com/zfl9/ipt2socks>\nipt2socks-fakedns v1.1.8 <https://github.com/wyzhou-com/ipt2socks-fakedns>"
 
 static void* run_event_loop(void *is_main_thread);
 static void on_async_exit(evloop_t *loop, ev_async *watcher __attribute__((unused)), int revents __attribute__((unused)));
