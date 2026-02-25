@@ -40,8 +40,9 @@ type* func_name(type **cache, type *entry) {                                 \
     if (MYHASH_CNT(*cache) > maxsize_var) {                                  \
         type *cur = NULL, *tmp = NULL;                                       \
         MYHASH_FOR(*cache, cur, tmp) {                                       \
-            MYHASH_DEL(*cache, cur);                                         \
-            return cur; /* evict the oldest (LRU) entry */                    \
+            /* Do not call MYHASH_DEL here! The caller invokes the timeout callback */ \
+            /* which will properly handle MYHASH_DEL and avoid double deletion. */ \
+            return cur; /* return the oldest (LRU) entry */                  \
         }                                                                    \
     }                                                                        \
     return NULL;                                                             \
