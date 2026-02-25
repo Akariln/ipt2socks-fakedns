@@ -166,7 +166,7 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
 
     /* FakeDNS reverse lookup for domain resolution */
     const char *fake_domain = NULL;
-    char domain_buf[256];
+    char domain_buf[FAKEDNS_MAX_DOMAIN_LEN];
     if ((g_options & OPT_ENABLE_FAKEDNS) && isipv4) {
         uint32_t target_ip = ((skaddr4_t *)&skaddr)->sin_addr.s_addr;
         if (fakedns_is_fakeip(target_ip)) {

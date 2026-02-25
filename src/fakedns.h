@@ -5,6 +5,8 @@
 #include <stddef.h>
 #include <stdbool.h>
 
+#define FAKEDNS_MAX_DOMAIN_LEN 244
+
 void fakedns_init(const char *cidr_str);
 
 bool fakedns_reverse_lookup(uint32_t ip, char *buffer, size_t buf_len);

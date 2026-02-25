@@ -111,7 +111,7 @@ void tcp_tproxy_accept_cb(evloop_t *evloop, evio_t *accept_watcher, int revents 
 
     /* FakeDNS reverse lookup for domain resolution */
     const char *fake_domain = NULL;
-    char domain_buf[256];
+    char domain_buf[FAKEDNS_MAX_DOMAIN_LEN];
     if ((g_options & OPT_ENABLE_FAKEDNS) && isipv4 && fakedns_is_fakeip(((skaddr4_t *)&skaddr)->sin_addr.s_addr)) {
         if (fakedns_reverse_lookup(((skaddr4_t *)&skaddr)->sin_addr.s_addr, domain_buf, sizeof(domain_buf))) {
             fake_domain = domain_buf;
