@@ -201,9 +201,7 @@ void* mempool_alloc_sized(memory_pool_t *pool, size_t size) {
 void* mempool_calloc_sized(memory_pool_t *pool, size_t size) {
     void *ptr = mempool_alloc_sized(pool, size);
     if (ptr) {
-        /* Get header to retrieve correct data_size for zeroing */
-        block_header_t *header = (block_header_t *)((char *)ptr - sizeof(block_header_t));
-        memset(ptr, 0, header->data_size);
+        memset(ptr, 0, size);
     }
     return ptr;
 }
