@@ -49,7 +49,7 @@ musl-static:
 debug:
 	$(MAKE) clean
 	$(MAKE) CFLAGS="-std=c99 -Wall -Wextra -Wvla -pthread -O0 -g \
-		-fno-strict-aliasing -MMD -MP -DENABLE_SENDTO_LOG \
+		-fno-strict-aliasing -MMD -MP -DENABLE_SENDTO_LOG -DFAKEDNS_MRU_STATS \
 		-fsanitize=address,undefined $(EXTRA_CFLAGS)" \
 		LDFLAGS="-pthread -g -fsanitize=address,undefined $(EXTRA_LDFLAGS)" \
 		all
