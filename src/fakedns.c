@@ -110,7 +110,10 @@ void fakedns_init(const char *cidr_str) {
         exit(1);
     }
 
-    g_max_probes = g_pool_size / 32;
+    // Fix linear probing limit issue:
+    // We limit Max Probing strictly to 128 (approx 0.95^128 < 0.002 probability of failure at 95% load)
+    // to prevent CPU spinning and write-lock starvation on huge fake-ip CIDRs.
+    g_max_probes = (g_pool_size < 128) ? g_pool_size : 128;
 
     LOG_ALWAYS_INF("[fakedns_init] IP range: %s/%ld", ip_str, prefix_len);
     LOG_ALWAYS_INF("[fakedns_init] Pool size: %u addresses (array: %.1f KB, max data: %.1f KB)",
