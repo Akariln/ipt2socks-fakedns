@@ -109,7 +109,7 @@ void fakedns_init(const char *cidr_str) {
         LOGERR("[fakedns_init] failed to allocate memory for fakedns pool (size: %u)", g_pool_size);
         exit(1);
     }
-    
+
     g_max_probes = g_pool_size / 32;
 
     LOG_ALWAYS_INF("[fakedns_init] IP range: %s/%ld", ip_str, prefix_len);
@@ -127,8 +127,9 @@ void fakedns_init(const char *cidr_str) {
 static uint32_t fakedns_lookup_domain(const char *domain, size_t len) {
     if (!domain || !g_pool_size) return 0;
 
+    uint32_t pool_mask = g_pool_size - 1;
     uint64_t hash = XXH3_64bits(domain, len);
-    uint32_t offset_start = (uint32_t)(hash % g_pool_size);
+    uint32_t offset_start = (uint32_t)(hash & pool_mask);
     /* Double Hashing: Use upper 32 bits as step size. Must be odd (coprime to power-of-2 size). */
     uint32_t step = (uint32_t)(hash >> 32) | 1;
 
@@ -164,7 +165,7 @@ static uint32_t fakedns_lookup_domain(const char *domain, size_t len) {
             return ip_net;
         } else {
             // Collision, continue probing (Double Hashing)
-            offset = (offset + step) % g_pool_size;
+            offset = (offset + step) & pool_mask;
         }
     }
 
@@ -259,7 +260,7 @@ static uint32_t fakedns_lookup_domain(const char *domain, size_t len) {
                 }
 
                 // Still valid, linear probe (Double Hashing)
-                offset = (offset + step) % g_pool_size;
+                offset = (offset + step) & pool_mask;
             }
         }
     }
