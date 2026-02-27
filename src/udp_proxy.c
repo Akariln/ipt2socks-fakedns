@@ -53,6 +53,7 @@ void udp_tproxy_recvmsg_cb(evloop_t *evloop, evio_t *tprecv_watcher, int revents
         msgs[i].msg_hdr.msg_namelen = sizeof(skaddr6_t); // Use largest size
         msgs[i].msg_hdr.msg_iov = &iovs[i];
         msgs[i].msg_hdr.msg_iovlen = 1;
+        memset(msg_control_buffers[i], 0, UDP_CTRLMESG_BUFSIZ);
         msgs[i].msg_hdr.msg_control = msg_control_buffers[i];
         msgs[i].msg_hdr.msg_controllen = UDP_CTRLMESG_BUFSIZ;
         msgs[i].msg_hdr.msg_flags = 0;
@@ -83,7 +84,10 @@ static char *build_socks5_udp_header(char *payload_start, const char *fake_domai
     if (fake_domain) {
         /* DOMAIN format: [reserved(2)][fragment(1)][addrtype(1)][len(1)][domain(n)][port(2)] */
         size_t domain_len = strlen(fake_domain);
-        if (domain_len > MAX_DOMAIN_LEN) domain_len = MAX_DOMAIN_LEN; // Defense in depth
+        if (domain_len > MAX_DOMAIN_LEN) {
+            LOGERR("[build_socks5_udp_header] domain too long: %zu", domain_len);
+            return NULL;
+        }
 
         actual_headerlen = 4 + 1 + domain_len + 2;
         header_start = payload_start - actual_headerlen;
@@ -95,7 +99,10 @@ static char *build_socks5_udp_header(char *payload_start, const char *fake_domai
         dmsg->addrtype = SOCKS5_ADDRTYPE_DOMAIN;
         dmsg->domain_len = (uint8_t)domain_len;
         memcpy(dmsg->domain_str, fake_domain, domain_len);
-        memcpy(dmsg->domain_str + domain_len, &((const skaddr4_t *)skaddr)->sin_port, 2);
+
+        portno_t port = isipv4 ? ((const skaddr4_t *)skaddr)->sin_port
+                        : skaddr->sin6_port;
+        memcpy(dmsg->domain_str + domain_len, &port, 2);
     } else {
         /* IP format */
         actual_headerlen = isipv4 ? sizeof(socks5_udp4msg_t) : sizeof(socks5_udp6msg_t);
@@ -190,6 +197,10 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
     size_t actual_headerlen;
 
     header_start = build_socks5_udp_header(payload_start, fake_domain, &skaddr, isipv4, &actual_headerlen);
+    if (!header_start) {
+        LOGERR("[udp_tproxy_recvmsg_cb] failed to build SOCKS5 UDP header");
+        return;
+    }
 
     udp_socks5ctx_t *context = NULL;
     bool force_fork = false;
@@ -885,6 +896,7 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, evio_t *udp_watcher,
 
         /* Prepare destination address */
         ip_port_t *toipport = &socks5ctx->key_ipport;
+        memset(&batch_sends[send_count].addr, 0, sizeof(skaddr6_t));
         if (dest_isipv4) {
             skaddr4_t *addr = (void *)&batch_sends[send_count].addr;
             addr->sin_family = AF_INET;
@@ -1052,30 +1064,6 @@ static void udp_tproxy_context_timeout_cb(evloop_t *evloop, evtimer_t *idle_time
     ev_timer_stop(evloop, idle_timer);
     close(context->udp_sockfd);
     mempool_free_sized(g_udp_context_pool, context, sizeof(*context));
-}
-
-void udp_dns_recv_cb(evloop_t *evloop, evio_t *watcher, int revents) {
-    socklen_t addrlen = sizeof(skaddr4_t);
-    skaddr4_t addr;
-
-    ssize_t nrecv = recvfrom(watcher->fd, g_udp_batch_buffer[0], UDP_DATAGRAM_MAXSIZ, 0, (struct sockaddr *)&addr, &addrlen);
-    if (nrecv < 0) {
-        if (errno != EAGAIN && errno != EWOULDBLOCK) {
-            LOGERR("[udp_dns_recv_cb] recvfrom: %s", strerror(errno));
-        }
-        return;
-    }
-
-    // Process Query
-    size_t nresp = fakedns_process_query((uint8_t*)g_udp_batch_buffer[0], nrecv, (uint8_t*)g_udp_batch_buffer[0], UDP_DATAGRAM_MAXSIZ);
-
-    if (nresp > 0) {
-        if (sendto(watcher->fd, g_udp_batch_buffer[0], nresp, 0, (struct sockaddr *)&addr, addrlen) < 0) {
-            if (errno != EAGAIN && errno != EWOULDBLOCK) {
-                LOGERR("[udp_dns_recv_cb] sendto: %s", strerror(errno));
-            }
-        }
-    }
 }
 
 void udp_proxy_close_all_sessions(evloop_t *evloop) {

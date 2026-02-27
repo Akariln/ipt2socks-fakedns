@@ -68,7 +68,7 @@ jobs:
                         -Wl,--gc-sections -s -static \
                         -o ipt2socks \
                         src/main.c src/ctx.c src/lrucache.c src/netutils.c src/socks5.c libev/ev.c src/fakedns.c \
-                        src/xxhash.c src/logutils.c src/mempool.c src/udp_proxy.c src/tcp_proxy.c \
+                        src/fakedns_server.c src/xxhash.c src/logutils.c src/mempool.c src/udp_proxy.c src/tcp_proxy.c \
                         -lm"
 
           # Fix ownership

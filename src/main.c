@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 #include "ctx.h"
 #include "fakedns.h"
+#include "fakedns_server.h"
 #include "logutils.h"
 #include "lrucache.h"
 #include "mempool.h"
@@ -648,7 +649,7 @@ static void* run_event_loop(void *arg) {
             exit_code = ENOMEM;
             goto cleanup;
         }
-        ev_io_init(fakedns_watcher, udp_dns_recv_cb, fakedns_sockfd, EV_READ);
+        ev_io_init(fakedns_watcher, fakedns_server_recv_cb, fakedns_sockfd, EV_READ);
         ev_io_start(evloop, fakedns_watcher);
     }
 

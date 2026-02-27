@@ -1,0 +1,8 @@
+#ifndef IPT2SOCKS_FAKEDNS_SERVER_H
+#define IPT2SOCKS_FAKEDNS_SERVER_H
+
+#include "../libev/ev.h"
+
+void fakedns_server_recv_cb(evloop_t *evloop, evio_t *watcher, int revents);
+
+#endif /* IPT2SOCKS_FAKEDNS_SERVER_H */

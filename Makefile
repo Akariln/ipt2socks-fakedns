@@ -11,8 +11,8 @@ LDFLAGS = -pthread -O3 -flto=auto -Wl,--gc-sections -s $(EXTRA_LDFLAGS)
 LDLIBS = -lm
 
 SRCS = src/main.c src/ctx.c src/lrucache.c src/netutils.c src/socks5.c \
-       libev/ev.c src/fakedns.c src/xxhash.c src/logutils.c src/mempool.c \
-       src/udp_proxy.c src/tcp_proxy.c
+       libev/ev.c src/fakedns.c src/fakedns_server.c src/xxhash.c \
+       src/logutils.c src/mempool.c src/udp_proxy.c src/tcp_proxy.c
 
 OBJS = $(SRCS:.c=.o)
 DEPS = $(SRCS:.c=.d)

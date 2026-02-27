@@ -246,9 +246,11 @@ static uint32_t fakedns_lookup_domain(const char *domain, size_t len) {
                 // Strategy A: Overwrite if expired
                 int32_t remaining = (int32_t)(entry->expire - now);
                 if (remaining < 0) {
-                    LOGINF("[fakedns] overwrite expired entry: %s -> %s (IP: %u.%u.%u.%u)",
-                           entry->domain, domain,
-                           ((uint8_t*)&ip_net)[0], ((uint8_t*)&ip_net)[1], ((uint8_t*)&ip_net)[2], ((uint8_t*)&ip_net)[3]);
+                    IF_VERBOSE {
+                        LOGINF("[fakedns] overwrite expired entry: %s -> %s (IP: %u.%u.%u.%u)",
+                               entry->domain, domain,
+                               ((uint8_t*)&ip_net)[0], ((uint8_t*)&ip_net)[1], ((uint8_t*)&ip_net)[2], ((uint8_t*)&ip_net)[3]);
+                    }
 
                     // Reset entry for new domain
                     size_t copy_len = len >= sizeof(entry->domain) ? sizeof(entry->domain) - 1 : len;
@@ -505,8 +507,10 @@ size_t fakedns_process_query(const uint8_t *query, size_t qlen, uint8_t *buffer,
             // Set ANCOUNT = 1
             buffer[7] = 1;
 
-            LOGINF("[fakedns] query: A %s -> %u.%u.%u.%u", domain,
-                   ((uint8_t*)&fakeip)[0], ((uint8_t*)&fakeip)[1], ((uint8_t*)&fakeip)[2], ((uint8_t*)&fakeip)[3]);
+            IF_VERBOSE {
+                LOGINF("[fakedns] query: A %s -> %u.%u.%u.%u", domain,
+                       ((uint8_t*)&fakeip)[0], ((uint8_t*)&fakeip)[1], ((uint8_t*)&fakeip)[2], ((uint8_t*)&fakeip)[3]);
+            }
         }
     } else if (qtype == 28) { /* AAAA Record */
         // Return NOERROR with 0 Answers (Handling dual-stack fallback)
