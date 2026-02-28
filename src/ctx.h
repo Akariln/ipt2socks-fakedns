@@ -11,7 +11,7 @@
 #include <stdint.h>
 #include <pthread.h>
 
-#define UDP_BATCH_SIZE 64
+#define UDP_BATCH_SIZE 16
 #define MAX_THREADS 64
 
 // Thread info structure for graceful shutdown

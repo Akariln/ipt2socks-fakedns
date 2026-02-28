@@ -7,7 +7,7 @@
 #include <string.h>
 #include <sys/socket.h>
 
-#define FAKEDNS_BATCH_SIZE 64
+#define FAKEDNS_BATCH_SIZE 16
 #define FAKEDNS_MAX_UDP_SIZE 512
 
 typedef struct {
