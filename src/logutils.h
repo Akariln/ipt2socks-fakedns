@@ -6,7 +6,6 @@
 #include <time.h>
 #include <stdbool.h>
 
-
 extern bool g_verbose;
 #define IF_VERBOSE if (unlikely(g_verbose))
 

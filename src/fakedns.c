@@ -200,7 +200,7 @@ static uint32_t fakedns_lookup_domain(const char *domain, size_t len) {
             }
             if (!entry) {
                 pthread_rwlock_unlock(&g_fakedns_rwlock);
-                LOGERR("[fakedns_lookup_domain] malloc failed for domain: %s", domain);
+                LOGERR("[fakedns_lookup_domain] posix_memalign failed for domain: %s", domain);
                 return 0;
             }
             entry->ip = ip_net;
@@ -710,7 +710,7 @@ void fakedns_load(const char *path) {
                 entry = NULL;
             }
             if (!entry) {
-                LOGERR("[fakedns_load] malloc failed for domain: %s", domain);
+                LOGERR("[fakedns_load] posix_memalign failed for domain: %s", domain);
                 continue;
             }
             entry->ip = ip;
