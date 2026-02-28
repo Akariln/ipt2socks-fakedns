@@ -14,8 +14,7 @@
 #include <string.h>
 #include <arpa/inet.h>
 
-/* Fixed buffer size for SOCKS5 responses (enough for all response types) */
-#define SOCKS5_RESPONSE_MAX_SIZE 512
+#define SOCKS5_RESPONSE_MAX_SIZE 32
 
 #include <sys/socket.h>
 
@@ -179,10 +178,12 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
         if (fakedns_is_fakeip(target_ip)) {
             if (fakedns_reverse_lookup(target_ip, domain_buf, sizeof(domain_buf))) {
                 fake_domain = domain_buf;
-                LOGINF("[udp_tproxy_recvmsg_cb] fakedns hit: %u.%u.%u.%u -> %s",
-                       ((uint8_t *)&target_ip)[0], ((uint8_t *)&target_ip)[1],
-                       ((uint8_t *)&target_ip)[2], ((uint8_t *)&target_ip)[3],
-                       fake_domain);
+                IF_VERBOSE {
+                    LOGINF("[udp_tproxy_recvmsg_cb] fakedns hit: %u.%u.%u.%u -> %s",
+                           ((uint8_t *)&target_ip)[0], ((uint8_t *)&target_ip)[1],
+                           ((uint8_t *)&target_ip)[2], ((uint8_t *)&target_ip)[3],
+                           fake_domain);
+                }
             } else {
                 LOGERR("[udp_tproxy_recvmsg_cb] fakedns miss for FakeIP: %u.%u.%u.%u, dropping packet",
                        ((uint8_t *)&target_ip)[0], ((uint8_t *)&target_ip)[1],
@@ -373,6 +374,7 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
         evtimer_t *timer = &context->idle_timer;
         ev_timer_init(timer, udp_socks5_context_timeout_cb, 0, g_udp_idletimeout_sec);
         timer->data = (void *)sizeof(socks5_ipv4resp_t); // response_length
+        ev_timer_again(evloop, timer);
 
         udp_socks5ctx_t *del_context = NULL;
 
@@ -628,33 +630,9 @@ static void udp_socks5_recv_proxyresp_cb(evloop_t *evloop, evio_t *tcp_watcher, 
             *(uint16_t *)tcp_watcher->data = sizeof(socks5_ipv4resp_t); // response_nrecv
             return;
         } else if (((socks5_ipv4resp_t *)(tcp_watcher->data + 2))->addrtype == SOCKS5_ADDRTYPE_DOMAIN) {
-            /* Security: Ensure domain_len field has been received */
-            if (*(uint16_t *)tcp_watcher->data < sizeof(socks5_ipv4resp_t) + 1) {
-                /* domain_len not yet received, wait for next callback */
-                return;
-            }
-
-            uint8_t domain_len = ((socks5_domainresp_t *)(tcp_watcher->data + 2))->domain_len;
-
-            /* Security: Validate domain_len (DNS max is 253) */
-            if (domain_len == 0 || domain_len > 253) {
-                LOGERR("[udp_socks5_recv_proxyresp_cb] invalid domain_len: %u", domain_len);
-                udp_socks5ctx_release(evloop, context);
-                return;
-            }
-
-            size_t total_len = sizeof(socks5_domainreq_t) + domain_len + 2; // header(4) + len(1) + domain(n) + port(2)
-
-            /* Check if response fits in fixed buffer */
-            if (total_len > (uintptr_t)context->idle_timer.data) {
-                LOGERR("[udp_socks5_recv_proxyresp_cb] response too large: %zu bytes", total_len);
-                udp_socks5ctx_release(evloop, context);
-                return;
-            }
-
-            /* Update expected length and continue receiving */
-            context->idle_timer.data = (void *)total_len;
-            *(uint16_t *)tcp_watcher->data = sizeof(socks5_ipv4resp_t); // response_nrecv
+            LOGERR("[udp_socks5_recv_proxyresp_cb] SOCKS5 server returned unsupported DOMAIN type for UDP associatation");
+            udp_socks5ctx_release(evloop, context);
+            return;
         }
     }
     portno_t relay_port;
@@ -663,9 +641,6 @@ static void udp_socks5_recv_proxyresp_cb(evloop_t *evloop, evio_t *tcp_watcher, 
         relay_port = ((socks5_ipv4resp_t *)(tcp_watcher->data + 2))->portnum;
     } else if (atype == SOCKS5_ADDRTYPE_IPV6) {
         relay_port = ((socks5_ipv6resp_t *)(tcp_watcher->data + 2))->portnum;
-    } else if (atype == SOCKS5_ADDRTYPE_DOMAIN) {
-        socks5_domainresp_t *dresp = (void *)(tcp_watcher->data + 2);
-        memcpy(&relay_port, dresp->domain_str + dresp->domain_len, 2);
     } else {
         LOGERR("[udp_socks5_recv_proxyresp_cb] unsupported address type: 0x%02x", atype);
         udp_socks5ctx_release(evloop, context);
@@ -819,7 +794,6 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, evio_t *udp_watcher,
         socks5_udp4msg_t *udp4msg = (void *)buffer;
         bool isipv4 = udp4msg->addrtype == SOCKS5_ADDRTYPE_IPV4;
         bool isipv6 = udp4msg->addrtype == SOCKS5_ADDRTYPE_IPV6;
-        bool isdomain = udp4msg->addrtype == SOCKS5_ADDRTYPE_DOMAIN;
 
         size_t headerlen;
         if (isipv4) {
@@ -828,17 +802,13 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, evio_t *udp_watcher,
         } else if (isipv6) {
             headerlen = sizeof(socks5_udp6msg_t);
             if ((size_t)nrecv < headerlen) continue;
-        } else if (isdomain) {
-            if ((size_t)nrecv < 5) continue;
-            uint8_t domain_len = ((uint8_t *)buffer)[4];
-            headerlen = 4 + 1 + domain_len + 2;
-            if ((size_t)nrecv < headerlen) continue;
         } else {
             continue;
         }
 
         /* Determine source (bind) address */
         ip_port_t fromipport;
+        memset(&fromipport, 0, sizeof(fromipport));
         bool dest_isipv4;
 
         if (socks5ctx->is_fakedns) {
@@ -855,8 +825,7 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, evio_t *udp_watcher,
                 fromipport.port = udp6msg->portnum;
                 dest_isipv4 = false;
             } else {
-                LOGWAR("[udp_socks5_recv_udpmessage_cb] DOMAIN response without FakeDNS, dropping packet");
-                continue;  /* Domain without FakeDNS */
+                continue;  /* Unsupported type */
             }
         }
 

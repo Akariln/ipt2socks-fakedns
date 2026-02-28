@@ -97,17 +97,6 @@ typedef struct {
     /* portno_t portnum; // follows domain_str */
 } __attribute__((packed)) socks5_domainreq_t;
 
-/* socks5 domain-proxy response */
-typedef struct {
-    uint8_t   version;
-    uint8_t   respcode;
-    uint8_t   reserved; /* 0x00 */
-    uint8_t   addrtype;
-    uint8_t   domain_len;
-    uint8_t   domain_str[]; /* variable length */
-    /* portno_t portnum; // follows domain_str */
-} __attribute__((packed)) socks5_domainresp_t;
-
 /* socks5 ipv4-proxy response */
 typedef struct {
     uint8_t   version;

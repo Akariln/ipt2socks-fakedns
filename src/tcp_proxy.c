@@ -115,8 +115,10 @@ void tcp_tproxy_accept_cb(evloop_t *evloop, evio_t *accept_watcher, int revents 
     if ((g_options & OPT_ENABLE_FAKEDNS) && isipv4 && fakedns_is_fakeip(((skaddr4_t *)&skaddr)->sin_addr.s_addr)) {
         if (fakedns_reverse_lookup(((skaddr4_t *)&skaddr)->sin_addr.s_addr, domain_buf, sizeof(domain_buf))) {
             fake_domain = domain_buf;
-            LOGINF("[tcp_tproxy_accept_cb] fakedns hit: %u.%u.%u.%u -> %s",
-                   ((uint8_t *)&skaddr)[4], ((uint8_t *)&skaddr)[5], ((uint8_t *)&skaddr)[6], ((uint8_t *)&skaddr)[7], fake_domain);
+            IF_VERBOSE {
+                LOGINF("[tcp_tproxy_accept_cb] fakedns hit: %u.%u.%u.%u -> %s",
+                       ((uint8_t *)&skaddr)[4], ((uint8_t *)&skaddr)[5], ((uint8_t *)&skaddr)[6], ((uint8_t *)&skaddr)[7], fake_domain);
+            }
         } else {
             LOGERR("[tcp_tproxy_accept_cb] fakedns miss for FakeIP: %u.%u.%u.%u, dropping connection",
                    ((uint8_t *)&skaddr)[4], ((uint8_t *)&skaddr)[5], ((uint8_t *)&skaddr)[6], ((uint8_t *)&skaddr)[7]);
@@ -180,8 +182,8 @@ void tcp_tproxy_accept_cb(evloop_t *evloop, evio_t *accept_watcher, int revents 
     }
     ev_io_start(evloop, watcher);
 
-    /* Use embedded buffer for response (offset 300, providing 300 bytes space) */
-    context->socks5_watcher.data = context->handshake_buf + 300;
+    /* Use embedded buffer for response (offset 290, providing 30 bytes space) */
+    context->socks5_watcher.data = context->handshake_buf + 290;
     context->socks5_length = (size_t)tfo_nsend;
 }
 
@@ -329,30 +331,21 @@ static void tcp_socks5_recv_proxyresp_cb(evloop_t *evloop, evio_t *socks5_watche
             total_len = sizeof(socks5_ipv4resp_t); // 10
         } else if (atype == SOCKS5_ADDRTYPE_IPV6) {
             total_len = sizeof(socks5_ipv6resp_t); // 22
-        } else if (atype == SOCKS5_ADDRTYPE_DOMAIN) {
-            uint8_t domain_len = ((socks5_domainresp_t *)socks5_watcher->data)->domain_len;
-            if (domain_len == 0 || domain_len > 253) {
-                LOGERR("[tcp_socks5_recv_proxyresp_cb] invalid domain_len: %u", domain_len);
-                tcp_context_release(evloop, context, true);
-                return;
-            }
-            total_len = sizeof(socks5_domainresp_t) + domain_len + 2;
         } else {
             LOGERR("[tcp_socks5_recv_proxyresp_cb] unsupported address type: 0x%02x", atype);
             tcp_context_release(evloop, context, true);
             return;
         }
 
-        /* Ensure buffer size for big domain */
-        if (total_len > 300) {
+        if (total_len > 30) {
             LOGERR("[tcp_socks5_recv_proxyresp_cb] response too large: %zu", total_len);
             tcp_context_release(evloop, context, true);
             return;
         }
 
         if (total_len > 5) {
-            /* We are using embedded buffer, no realloc needed as we reserved 300 bytes.
-             * context->socks5_watcher.data already points to handshake_buf + 300.
+            /* We are using embedded buffer, no realloc needed as we reserved 30 bytes.
+             * context->socks5_watcher.data already points to handshake_buf + 290.
              */
 
             /* Update length targets */

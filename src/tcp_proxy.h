@@ -14,7 +14,7 @@ typedef struct tcp_context_t {
     int      socks5_pipefd[2]; // socks5 pipe buffer
     uint16_t client_length;    // nrecv/nsend, npipe
     uint16_t socks5_length;    // nrecv/nsend, npipe
-    uint8_t  handshake_buf[600]; // Buffer for handshake messages
+    uint8_t  handshake_buf[320]; // Buffer for handshake messages
     struct tcp_context_t *prev;  // Doubly linked list for cleanup
     struct tcp_context_t *next;
 } tcp_context_t;
