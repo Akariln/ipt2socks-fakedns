@@ -43,6 +43,7 @@ static void print_command_help(void) {
            " -c, --cache-size <size>            udp context cache maxsize, default: 256\n"
            " -o, --udp-timeout <sec>            udp context idle timeout, default: 60\n"
            " -j, --thread-nums <num>            number of the worker threads, default: 1\n"
+           " -J, --udp-thread-nums <num>        number of udp threads, default: 1\n"
            " -n, --nofile-limit <num>           set nofile limit, may need root privilege\n"
            " -u, --run-user <user>              run as the given user, need root privilege\n"
            " -T, --tcp-only                     listen tcp only, aka: disable udp proxy\n"
@@ -130,7 +131,7 @@ static bool validate_uint_range(const char *valstr, unsigned long max_val, unsig
 
 static void parse_command_args(int argc, char* argv[]) {
     opterr = 0;
-    const char *optstr = ":s:p:a:k:b:B:l:S:c:o:j:n:u:TU46RrwWvVh";
+    const char *optstr = ":s:p:a:k:b:B:l:S:c:o:j:J:n:u:TU46RrwWvVh";
     const struct option options[] = {
         {"server-addr",   required_argument, NULL, 's'},
         {"server-port",   required_argument, NULL, 'p'},
@@ -143,6 +144,7 @@ static void parse_command_args(int argc, char* argv[]) {
         {"cache-size",    required_argument, NULL, 'c'},
         {"udp-timeout",   required_argument, NULL, 'o'},
         {"thread-nums",   required_argument, NULL, 'j'},
+        {"udp-thread-nums", required_argument, NULL, 'J'},
         {"nofile-limit",  required_argument, NULL, 'n'},
         {"run-user",      required_argument, NULL, 'u'},
         {"tcp-only",      no_argument,       NULL, 'T'},
@@ -244,6 +246,14 @@ static void parse_command_args(int argc, char* argv[]) {
                     g_nthreads = (uint8_t)val;
                     break;
                 }
+            case 'J': {
+                    unsigned long val;
+                    if (!validate_uint_range(optarg, 255, &val, "number of udp threads")) {
+                        goto PRINT_HELP_AND_EXIT;
+                    }
+                    g_udp_nthreads = (uint8_t)val;
+                    break;
+                }
             case 'n': {
                     unsigned long val;
                     if (!validate_uint_range(optarg, ULONG_MAX, &val, "nofile limit")) {
@@ -339,6 +349,11 @@ static void parse_command_args(int argc, char* argv[]) {
         goto PRINT_HELP_AND_EXIT;
     }
 
+    /* Clamp udp thread count to total thread count */
+    if (g_udp_nthreads > g_nthreads) {
+        g_udp_nthreads = g_nthreads;
+    }
+
     if (optval_auth_username && !optval_auth_password) {
         printf("[parse_command_args] username specified, but password is not provided\n");
         goto PRINT_HELP_AND_EXIT;
@@ -386,10 +401,15 @@ int main(int argc, char* argv[]) {
     if (g_tcp_syncnt_max) {
         LOG_ALWAYS_INF("[main] max number of syn retries: %hhu", g_tcp_syncnt_max);
     }
-    LOG_ALWAYS_INF("[main] udp cache capacity: main=%hu fork=%hu tproxy=%hu",
-                   lrucache_get_main_maxsize(), lrucache_get_fork_maxsize(), lrucache_get_tproxy_maxsize());
-    LOG_ALWAYS_INF("[main] udp session idle timeout: %hu", g_udp_idletimeout_sec);
+    if (g_options & OPT_ENABLE_UDP) {
+        LOG_ALWAYS_INF("[main] udp cache capacity: main=%hu fork=%hu tproxy=%hu",
+                       lrucache_get_main_maxsize(), lrucache_get_fork_maxsize(), lrucache_get_tproxy_maxsize());
+        LOG_ALWAYS_INF("[main] udp session idle timeout: %hu", g_udp_idletimeout_sec);
+    }
     LOG_ALWAYS_INF("[main] number of worker threads: %hhu", g_nthreads);
+    if (g_options & OPT_ENABLE_UDP) {
+        LOG_ALWAYS_INF("[main] number of udp threads: %hhu", g_udp_nthreads);
+    }
     LOG_ALWAYS_INF("[main] max file descriptor limit: %zu", get_nofile_limit());
     if (g_options & OPT_ENABLE_TCP) {
         LOG_ALWAYS_INF("[main] enable tcp transparent proxy");
@@ -423,6 +443,7 @@ int main(int argc, char* argv[]) {
     int started_threads = 0;
     g_thread_count = g_nthreads - 1;
     for (int i = 0; i < g_thread_count; ++i) {
+        g_threads[i].thread_index = i + 1;
         g_threads[i].evloop = ev_loop_new(0);
         if (!g_threads[i].evloop) {
             LOGERR("[main] ev_loop_new failed for thread %d", i);
@@ -587,42 +608,50 @@ static void* run_event_loop(void *arg) {
         initial_blocks = MEMPOOL_INITIAL_SIZE;
     }
 
-    /* 1. Packet Pool (variable-sized, high limit for throughput) */
-    g_udp_packet_pool = mempool_create(
-                            MEMPOOL_BLOCK_SIZE,
-                            initial_blocks,
-                            65536
-                        );
-    if (!g_udp_packet_pool) {
-        LOGERR("[run_event_loop] failed to create packet memory pool");
-        exit_code = 1;
-        goto cleanup;
-    }
+    /* Determine if this thread should handle UDP */
+    int my_thread_index = is_main_thread ? 0 : thread_info->thread_index;
+    bool should_handle_udp = (my_thread_index < g_udp_nthreads) && (g_options & OPT_ENABLE_UDP);
 
-    /* 2. UDP Context Pool: serves udp_socks5ctx_t (264 bytes) and udp_tproxyctx_t (120 bytes)
-     * Block size = max(sizeof(udp_socks5ctx_t), sizeof(udp_tproxyctx_t))
-     * Note: udp_tproxyctx_t wastes ~54% per allocation, acceptable for reduced fragmentation */
-    g_udp_context_pool = mempool_create(
-                             sizeof(udp_socks5ctx_t),  /* 264 bytes (larger of the two) */
-                             initial_blocks,
-                             initial_blocks * 2
-                         );
-    if (!g_udp_context_pool) {
-        LOGERR("[run_event_loop] failed to create context memory pool");
-        exit_code = 1;
-        goto cleanup;
+    /* 1. Packet Pool (variable-sized, high limit for throughput) */
+    if (should_handle_udp) {
+        g_udp_packet_pool = mempool_create(
+                                MEMPOOL_BLOCK_SIZE,
+                                initial_blocks,
+                                65536
+                            );
+        if (!g_udp_packet_pool) {
+            LOGERR("[run_event_loop] failed to create packet memory pool");
+            exit_code = 1;
+            goto cleanup;
+        }
+
+        /* 2. UDP Context Pool: serves udp_socks5ctx_t (264 bytes) and udp_tproxyctx_t (120 bytes)
+         * Block size = max(sizeof(udp_socks5ctx_t), sizeof(udp_tproxyctx_t))
+         * Note: udp_tproxyctx_t wastes ~54% per allocation, acceptable for reduced fragmentation */
+        g_udp_context_pool = mempool_create(
+                                 sizeof(udp_socks5ctx_t),  /* 264 bytes (larger of the two) */
+                                 initial_blocks,
+                                 initial_blocks * 2
+                             );
+        if (!g_udp_context_pool) {
+            LOGERR("[run_event_loop] failed to create context memory pool");
+            exit_code = 1;
+            goto cleanup;
+        }
     }
 
     /* TCP Context Pool */
-    g_tcp_context_pool = mempool_create(
-                             sizeof(tcp_context_t),
-                             128,
-                             0
-                         );
-    if (!g_tcp_context_pool) {
-        LOGERR("[run_event_loop] failed to create tcp context memory pool");
-        exit_code = 1;
-        goto cleanup;
+    if (g_options & OPT_ENABLE_TCP) {
+        g_tcp_context_pool = mempool_create(
+                                 sizeof(tcp_context_t),
+                                 128,
+                                 0
+                             );
+        if (!g_tcp_context_pool) {
+            LOGERR("[run_event_loop] failed to create tcp context memory pool");
+            exit_code = 1;
+            goto cleanup;
+        }
     }
 
     if (is_main_thread) {
@@ -655,19 +684,21 @@ static void* run_event_loop(void *arg) {
     bool ep_enabled[EP_COUNT] = {
         [EP_TCP4] = (g_options & OPT_ENABLE_TCP) && (g_options & OPT_ENABLE_IPV4),
         [EP_TCP6] = (g_options & OPT_ENABLE_TCP) && (g_options & OPT_ENABLE_IPV6),
-        [EP_UDP4] = (g_options & OPT_ENABLE_UDP) && (g_options & OPT_ENABLE_IPV4),
-        [EP_UDP6] = (g_options & OPT_ENABLE_UDP) && (g_options & OPT_ENABLE_IPV6),
+        [EP_UDP4] = should_handle_udp && (g_options & OPT_ENABLE_IPV4),
+        [EP_UDP6] = should_handle_udp && (g_options & OPT_ENABLE_IPV6),
     };
 
     bool is_tproxy = !(g_options & OPT_TCP_USE_REDIRECT);
     bool is_tfo_accept = g_options & OPT_ENABLE_TFO_ACCEPT;
-    bool is_reuse_port = g_nthreads > 1 || (g_options & OPT_ALWAYS_REUSE_PORT);
+    bool is_tcp_reuse_port = g_nthreads > 1 || (g_options & OPT_ALWAYS_REUSE_PORT);
+    bool is_udp_reuse_port = g_udp_nthreads > 1 || (g_options & OPT_ALWAYS_REUSE_PORT);
 
     for (int i = 0; i < EP_COUNT; i++) {
         if (!ep_enabled[i]) {
             continue;
         }
-        exit_code = setup_listen_endpoint(evloop, &endpoints[i], is_tproxy, is_reuse_port, is_tfo_accept);
+        bool reuse = endpoints[i].is_tcp ? is_tcp_reuse_port : is_udp_reuse_port;
+        exit_code = setup_listen_endpoint(evloop, &endpoints[i], is_tproxy, reuse, is_tfo_accept);
         if (exit_code) {
             goto cleanup;
         }
@@ -716,7 +747,7 @@ cleanup:
     }
 
     /* 2. Return all active sessions to pools */
-    if (g_options & OPT_ENABLE_UDP) {
+    if (should_handle_udp) {
         udp_proxy_close_all_sessions(evloop);
     }
     if (g_options & OPT_ENABLE_TCP) {

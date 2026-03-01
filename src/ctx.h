@@ -19,6 +19,7 @@ typedef struct {
     pthread_t thread_id;
     evloop_t *evloop;
     ev_async exit_watcher;
+    int thread_index;       // thread index: main=0, workers=1..N-1
 } thread_info_t;
 
 // Global thread management
@@ -40,6 +41,7 @@ enum {
 extern bool     g_verbose;
 extern uint16_t g_options;
 extern uint8_t  g_nthreads;
+extern uint8_t  g_udp_nthreads;
 
 extern char      g_bind_ipstr4[IP4STRLEN];
 extern char      g_bind_ipstr6[IP6STRLEN];
