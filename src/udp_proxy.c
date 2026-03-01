@@ -920,7 +920,6 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, evio_t *udp_watcher,
             indices[k] = k;
         }
 
-        int fd_groups = 0;
         for (int i = 0; i < send_count; ) {
             udp_tproxyctx_t *ctx = batch_sends[indices[i]].ctx;
             int group_start = i;
@@ -993,7 +992,6 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, evio_t *udp_watcher,
             }
 
             i += group_count;
-            fd_groups++;
         }
     }
 
