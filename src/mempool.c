@@ -203,7 +203,7 @@ void* mempool_alloc_sized(memory_pool_t *pool, size_t size) {
     }
 
     /* Pool exhausted */
-    static int warn_counter = 0;
+    static __thread int warn_counter = 0;
     if (warn_counter++ % 1000 == 0) {
         LOGWAR("[mempool] pool exhausted (%zu/%zu)", pool->pool_blocks, pool->max_blocks);
     }
