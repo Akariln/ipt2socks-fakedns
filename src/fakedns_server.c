@@ -1,4 +1,3 @@
-#define _GNU_SOURCE
 #include "fakedns_server.h"
 #include "fakedns.h"
 #include "logutils.h"

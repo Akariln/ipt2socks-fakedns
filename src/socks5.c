@@ -1,4 +1,3 @@
-#define _GNU_SOURCE
 #include "socks5.h"
 #include "logutils.h"
 #include <string.h>
@@ -71,20 +70,26 @@ void socks5_proxy_request_make(void *request, const void *skaddr, const char *do
         }
         memcpy(dreq->domain_str + dreq->domain_len, &port, 2);
 
-        if (reqlen) *reqlen = sizeof(socks5_domainreq_t) + dreq->domain_len + 2;
+        if (reqlen) {
+            *reqlen = sizeof(socks5_domainreq_t) + dreq->domain_len + 2;
+        }
     } else if (((skaddr4_t *)skaddr)->sin_family == AF_INET) {
         const skaddr4_t *addr = skaddr;
         req->addrtype = SOCKS5_ADDRTYPE_IPV4;
         req->ipaddr4 = addr->sin_addr.s_addr;
         req->portnum = addr->sin_port;
-        if (reqlen) *reqlen = sizeof(socks5_ipv4req_t);
+        if (reqlen) {
+            *reqlen = sizeof(socks5_ipv4req_t);
+        }
     } else {
         const skaddr6_t *addr = skaddr;
         socks5_ipv6req_t *req6 = (socks5_ipv6req_t *)request;
         req6->addrtype = SOCKS5_ADDRTYPE_IPV6;
         memcpy(&req6->ipaddr6, &addr->sin6_addr.s6_addr, IP6BINLEN);
         req6->portnum = addr->sin6_port;
-        if (reqlen) *reqlen = sizeof(socks5_ipv6req_t);
+        if (reqlen) {
+            *reqlen = sizeof(socks5_ipv6req_t);
+        }
     }
 }
 

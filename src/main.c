@@ -1,4 +1,3 @@
-#define _GNU_SOURCE
 #include "ctx.h"
 #include "fakedns.h"
 #include "fakedns_server.h"
@@ -172,13 +171,15 @@ static void parse_command_args(int argc, char* argv[]) {
     while ((shortopt = getopt_long(argc, argv, optstr, options, NULL)) != -1) {
         switch (shortopt) {
             case 's':
-                if (!validate_ip_address(optarg, IP6STRLEN, -1, "server"))
+                if (!validate_ip_address(optarg, IP6STRLEN, -1, "server")) {
                     goto PRINT_HELP_AND_EXIT;
+                }
                 strcpy(g_server_ipstr, optarg);
                 break;
             case 'p':
-                if (!validate_port_number(optarg, &g_server_portno, "server"))
+                if (!validate_port_number(optarg, &g_server_portno, "server")) {
                     goto PRINT_HELP_AND_EXIT;
+                }
                 break;
             case 'a':
                 if (strlen(optarg) > SOCKS5_USRPWD_USRMAXLEN) {
@@ -195,51 +196,59 @@ static void parse_command_args(int argc, char* argv[]) {
                 optval_auth_password = optarg;
                 break;
             case 'b':
-                if (!validate_ip_address(optarg, IP4STRLEN, AF_INET, "listen"))
+                if (!validate_ip_address(optarg, IP4STRLEN, AF_INET, "listen")) {
                     goto PRINT_HELP_AND_EXIT;
+                }
                 strcpy(g_bind_ipstr4, optarg);
                 break;
             case 'B':
-                if (!validate_ip_address(optarg, IP6STRLEN, AF_INET6, "listen"))
+                if (!validate_ip_address(optarg, IP6STRLEN, AF_INET6, "listen")) {
                     goto PRINT_HELP_AND_EXIT;
+                }
                 strcpy(g_bind_ipstr6, optarg);
                 break;
             case 'l':
-                if (!validate_port_number(optarg, &g_bind_portno, "listen"))
+                if (!validate_port_number(optarg, &g_bind_portno, "listen")) {
                     goto PRINT_HELP_AND_EXIT;
+                }
                 break;
             case 'S': {
                     unsigned long val;
-                    if (!validate_uint_range(optarg, 255, &val, "number of syn retransmits"))
+                    if (!validate_uint_range(optarg, 255, &val, "number of syn retransmits")) {
                         goto PRINT_HELP_AND_EXIT;
+                    }
                     g_tcp_syncnt_max = (uint8_t)val;
                     break;
                 }
             case 'c': {
                     unsigned long val;
-                    if (!validate_uint_range(optarg, 65535, &val, "maxsize of udp lrucache"))
+                    if (!validate_uint_range(optarg, 65535, &val, "maxsize of udp lrucache")) {
                         goto PRINT_HELP_AND_EXIT;
+                    }
                     lrucache_set_maxsize((uint16_t)val);
                     break;
                 }
             case 'o': {
                     unsigned long val;
-                    if (!validate_uint_range(optarg, 65535, &val, "udp socket idle timeout"))
+                    if (!validate_uint_range(optarg, 65535, &val, "udp socket idle timeout")) {
                         goto PRINT_HELP_AND_EXIT;
+                    }
                     g_udp_idletimeout_sec = (uint16_t)val;
                     break;
                 }
             case 'j': {
                     unsigned long val;
-                    if (!validate_uint_range(optarg, 255, &val, "number of worker threads"))
+                    if (!validate_uint_range(optarg, 255, &val, "number of worker threads")) {
                         goto PRINT_HELP_AND_EXIT;
+                    }
                     g_nthreads = (uint8_t)val;
                     break;
                 }
             case 'n': {
                     unsigned long val;
-                    if (!validate_uint_range(optarg, ULONG_MAX, &val, "nofile limit"))
+                    if (!validate_uint_range(optarg, ULONG_MAX, &val, "nofile limit")) {
                         goto PRINT_HELP_AND_EXIT;
+                    }
                     set_nofile_limit(val);
                     break;
                 }
@@ -290,7 +299,9 @@ static void parse_command_args(int argc, char* argv[]) {
                 } else {
                     char *longopt = argv[optind - 1];
                     char *equalsign = strchr(longopt, '=');
-                    if (equalsign) *equalsign = 0;
+                    if (equalsign) {
+                        *equalsign = 0;
+                    }
                     printf("[parse_command_args] unknown option: '%s'\n", longopt);
                 }
                 goto PRINT_HELP_AND_EXIT;
@@ -298,13 +309,15 @@ static void parse_command_args(int argc, char* argv[]) {
                 g_options |= OPT_ENABLE_FAKEDNS;
                 break;
             case 1002:
-                if (!validate_ip_address(optarg, IP4STRLEN, AF_INET, "fakedns"))
+                if (!validate_ip_address(optarg, IP4STRLEN, AF_INET, "fakedns")) {
                     goto PRINT_HELP_AND_EXIT;
+                }
                 strcpy(g_fakedns_ipstr, optarg);
                 break;
             case 1003:
-                if (!validate_port_number(optarg, &g_fakedns_portno, "fakedns"))
+                if (!validate_port_number(optarg, &g_fakedns_portno, "fakedns")) {
                     goto PRINT_HELP_AND_EXIT;
+                }
                 break;
             case 1004:
                 strncpy(g_fakedns_cidr, optarg, sizeof(g_fakedns_cidr) - 1);
@@ -364,20 +377,38 @@ int main(int argc, char* argv[]) {
     parse_command_args(argc, argv);
 
     LOG_ALWAYS_INF("[main] server address: %s#%hu", g_server_ipstr, g_server_portno);
-    if (g_options & OPT_ENABLE_IPV4) LOG_ALWAYS_INF("[main] listen address: %s#%hu", g_bind_ipstr4, g_bind_portno);
-    if (g_options & OPT_ENABLE_IPV6) LOG_ALWAYS_INF("[main] listen address: %s#%hu", g_bind_ipstr6, g_bind_portno);
-    if (g_tcp_syncnt_max) LOG_ALWAYS_INF("[main] max number of syn retries: %hhu", g_tcp_syncnt_max);
+    if (g_options & OPT_ENABLE_IPV4) {
+        LOG_ALWAYS_INF("[main] listen address: %s#%hu", g_bind_ipstr4, g_bind_portno);
+    }
+    if (g_options & OPT_ENABLE_IPV6) {
+        LOG_ALWAYS_INF("[main] listen address: %s#%hu", g_bind_ipstr6, g_bind_portno);
+    }
+    if (g_tcp_syncnt_max) {
+        LOG_ALWAYS_INF("[main] max number of syn retries: %hhu", g_tcp_syncnt_max);
+    }
     LOG_ALWAYS_INF("[main] udp cache capacity: main=%hu fork=%hu tproxy=%hu",
                    lrucache_get_main_maxsize(), lrucache_get_fork_maxsize(), lrucache_get_tproxy_maxsize());
     LOG_ALWAYS_INF("[main] udp session idle timeout: %hu", g_udp_idletimeout_sec);
     LOG_ALWAYS_INF("[main] number of worker threads: %hhu", g_nthreads);
     LOG_ALWAYS_INF("[main] max file descriptor limit: %zu", get_nofile_limit());
-    if (g_options & OPT_ENABLE_TCP) LOG_ALWAYS_INF("[main] enable tcp transparent proxy");
-    if (g_options & OPT_ENABLE_UDP) LOG_ALWAYS_INF("[main] enable udp transparent proxy");
-    if (g_options & OPT_TCP_USE_REDIRECT) LOG_ALWAYS_INF("[main] use redirect instead of tproxy");
-    if (g_options & OPT_ALWAYS_REUSE_PORT) LOG_ALWAYS_INF("[main] always enable reuseport feature");
-    if (g_options & OPT_ENABLE_TFO_ACCEPT) LOG_ALWAYS_INF("[main] enable tfo for tcp server socket");
-    if (g_options & OPT_ENABLE_TFO_CONNECT) LOG_ALWAYS_INF("[main] enable tfo for tcp client socket");
+    if (g_options & OPT_ENABLE_TCP) {
+        LOG_ALWAYS_INF("[main] enable tcp transparent proxy");
+    }
+    if (g_options & OPT_ENABLE_UDP) {
+        LOG_ALWAYS_INF("[main] enable udp transparent proxy");
+    }
+    if (g_options & OPT_TCP_USE_REDIRECT) {
+        LOG_ALWAYS_INF("[main] use redirect instead of tproxy");
+    }
+    if (g_options & OPT_ALWAYS_REUSE_PORT) {
+        LOG_ALWAYS_INF("[main] always enable reuseport feature");
+    }
+    if (g_options & OPT_ENABLE_TFO_ACCEPT) {
+        LOG_ALWAYS_INF("[main] enable tfo for tcp server socket");
+    }
+    if (g_options & OPT_ENABLE_TFO_CONNECT) {
+        LOG_ALWAYS_INF("[main] enable tfo for tcp client socket");
+    }
     if (g_options & OPT_ENABLE_FAKEDNS) {
         LOG_ALWAYS_INF("[main] enable fakedns feature");
         LOG_ALWAYS_INF("[main] fakedns listen address: %s#%hu", g_fakedns_ipstr, g_fakedns_portno);
@@ -444,7 +475,9 @@ THREAD_INIT_OK:
 static void on_signal_read(evloop_t *loop, evio_t *watcher, int revents __attribute__((unused))) {
     struct signalfd_siginfo fdsi;
     ssize_t s = read(watcher->fd, &fdsi, sizeof(struct signalfd_siginfo));
-    if (s != sizeof(struct signalfd_siginfo)) return;
+    if (s != sizeof(struct signalfd_siginfo)) {
+        return;
+    }
 
     LOG_ALWAYS_INF("[on_signal_read] caught signal %d, stopping...", fdsi.ssi_signo);
 
@@ -483,7 +516,9 @@ static int setup_listen_endpoint(evloop_t *evloop, const listen_endpoint_t *ep,
     } else {
         sockfd = new_udp_tprecv_sockfd(ep->family, is_reuse_port);
     }
-    if (sockfd < 0) return errno;
+    if (sockfd < 0) {
+        return errno;
+    }
 
     if (bind(sockfd, ep->bind_addr, ep->bind_len) < 0) {
         int saved_errno = errno;
@@ -548,7 +583,9 @@ static void* run_event_loop(void *arg) {
                         + lrucache_get_tproxy_maxsize();
     size_t initial_blocks = cache_size;
 
-    if (initial_blocks < MEMPOOL_INITIAL_SIZE) initial_blocks = MEMPOOL_INITIAL_SIZE;
+    if (initial_blocks < MEMPOOL_INITIAL_SIZE) {
+        initial_blocks = MEMPOOL_INITIAL_SIZE;
+    }
 
     /* 1. Packet Pool (variable-sized, high limit for throughput) */
     g_udp_packet_pool = mempool_create(
@@ -627,9 +664,13 @@ static void* run_event_loop(void *arg) {
     bool is_reuse_port = g_nthreads > 1 || (g_options & OPT_ALWAYS_REUSE_PORT);
 
     for (int i = 0; i < EP_COUNT; i++) {
-        if (!ep_enabled[i]) continue;
+        if (!ep_enabled[i]) {
+            continue;
+        }
         exit_code = setup_listen_endpoint(evloop, &endpoints[i], is_tproxy, is_reuse_port, is_tfo_accept);
-        if (exit_code) goto cleanup;
+        if (exit_code) {
+            goto cleanup;
+        }
     }
 
     if ((g_options & OPT_ENABLE_FAKEDNS) && is_main_thread) {
@@ -675,23 +716,33 @@ cleanup:
     }
 
     /* 2. Return all active sessions to pools */
-    if (g_options & OPT_ENABLE_UDP) udp_proxy_close_all_sessions(evloop);
-    if (g_options & OPT_ENABLE_TCP) tcp_proxy_close_all_sessions(evloop);
+    if (g_options & OPT_ENABLE_UDP) {
+        udp_proxy_close_all_sessions(evloop);
+    }
+    if (g_options & OPT_ENABLE_TCP) {
+        tcp_proxy_close_all_sessions(evloop);
+    }
 
     /* 3. Destroy memory pools */
     if (g_udp_packet_pool) {
         size_t leaks = mempool_destroy(g_udp_packet_pool);
-        if (leaks > 0) LOGERR("[run_event_loop] packet pool leaks: %zu", leaks);
+        if (leaks > 0) {
+            LOGERR("[run_event_loop] packet pool leaks: %zu", leaks);
+        }
         g_udp_packet_pool = NULL;
     }
     if (g_udp_context_pool) {
         size_t leaks = mempool_destroy(g_udp_context_pool);
-        if (leaks > 0) LOGERR("[run_event_loop] udp context pool leaks: %zu", leaks);
+        if (leaks > 0) {
+            LOGERR("[run_event_loop] udp context pool leaks: %zu", leaks);
+        }
         g_udp_context_pool = NULL;
     }
     if (g_tcp_context_pool) {
         size_t leaks = mempool_destroy(g_tcp_context_pool);
-        if (leaks > 0) LOGERR("[run_event_loop] tcp context pool leaks: %zu", leaks);
+        if (leaks > 0) {
+            LOGERR("[run_event_loop] tcp context pool leaks: %zu", leaks);
+        }
         g_tcp_context_pool = NULL;
     }
 

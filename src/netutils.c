@@ -1,4 +1,3 @@
-#define _GNU_SOURCE
 #include "netutils.h"
 #include "logutils.h"
 #include <stdlib.h>
@@ -70,10 +69,12 @@ size_t get_nofile_limit(void) {
 }
 
 /* declare function prototype (openwrt?) */
-int initgroups(const char *user, gid_t group);
+
 
 void run_as_user(const char *username, char *argv[]) {
-    if (geteuid() != 0) return; /* ignore if current user is not root */
+    if (geteuid() != 0) {
+        return; /* ignore if current user is not root */
+    }
 
     const struct passwd *userinfo = getpwnam(username);
     if (!userinfo) {
@@ -81,7 +82,9 @@ void run_as_user(const char *username, char *argv[]) {
         return;
     }
 
-    if (userinfo->pw_uid == 0) return; /* ignore if target user is root */
+    if (userinfo->pw_uid == 0) {
+        return; /* ignore if target user is root */
+    }
 
     if (setgid(userinfo->pw_gid) < 0) {
         LOGERR("[run_as_user] change to gid:%u of user:'%s': %s", userinfo->pw_gid, userinfo->pw_name, strerror(errno));
@@ -111,11 +114,14 @@ void run_as_user(const char *username, char *argv[]) {
 }
 
 int get_ipstr_family(const char *ipstr) {
-    if (!ipstr) return -1; /* invalid */
+    if (!ipstr) {
+        return -1; /* invalid */
+    }
     ipaddr6_t ipaddr; /* save output */
     if (inet_pton(AF_INET, ipstr, &ipaddr) == 1) {
         return AF_INET;
-    } else if (inet_pton(AF_INET6, ipstr, &ipaddr) == 1) {
+    }
+    if (inet_pton(AF_INET6, ipstr, &ipaddr) == 1) {
         return AF_INET6;
     } else {
         return -1; /* invalid */
@@ -314,16 +320,24 @@ static inline int new_nonblock_sockfd(int family, int sktype) {
         return -1;
     }
     set_non_block(sockfd);
-    if (family == AF_INET6) set_ipv6_only(sockfd);
+    if (family == AF_INET6) {
+        set_ipv6_only(sockfd);
+    }
     set_reuse_addr(sockfd);
     return sockfd;
 }
 
 int new_tcp_listen_sockfd(int family, bool is_tproxy, bool is_reuse_port, bool is_tfo_accept) {
     int sockfd = new_nonblock_sockfd(family, SOCK_STREAM);
-    if (is_tproxy) set_ip_transparent(family, sockfd);
-    if (is_reuse_port) set_reuse_port(sockfd);
-    if (is_tfo_accept) set_tfo_accept(sockfd);
+    if (is_tproxy) {
+        set_ip_transparent(family, sockfd);
+    }
+    if (is_reuse_port) {
+        set_reuse_port(sockfd);
+    }
+    if (is_tfo_accept) {
+        set_tfo_accept(sockfd);
+    }
     return sockfd;
 }
 
@@ -332,7 +346,9 @@ int new_tcp_connect_sockfd(int family, uint8_t tcp_syncnt) {
     set_tcp_nodelay(sockfd);
     set_tcp_quickack(sockfd);
     set_tcp_keepalive(sockfd);
-    if (tcp_syncnt) set_tcp_syncnt(sockfd, tcp_syncnt);
+    if (tcp_syncnt) {
+        set_tcp_syncnt(sockfd, tcp_syncnt);
+    }
     return sockfd;
 }
 
@@ -340,7 +356,9 @@ int new_udp_tprecv_sockfd(int family, bool is_reuse_port) {
     int sockfd = new_nonblock_sockfd(family, SOCK_DGRAM);
     set_ip_transparent(family, sockfd);
     set_recv_origdstaddr(family, sockfd);
-    if (is_reuse_port) set_reuse_port(sockfd);
+    if (is_reuse_port) {
+        set_reuse_port(sockfd);
+    }
     return sockfd;
 }
 
@@ -402,7 +420,9 @@ bool get_udp_orig_dstaddr(int family, struct msghdr *msg, void *dstaddr) {
 /* same as `accept()`, just a simple wrapper */
 int tcp_accept(int sockfd, void *addr, socklen_t *addrlen) {
     int newsockfd = accept(sockfd, addr, addrlen);
-    if (newsockfd >= 0) setup_accepted_sockfd(newsockfd);
+    if (newsockfd >= 0) {
+        setup_accepted_sockfd(newsockfd);
+    }
     return newsockfd;
 }
 
@@ -410,9 +430,13 @@ int tcp_accept(int sockfd, void *addr, socklen_t *addrlen) {
 bool tcp_connect(int sockfd, const void *addr, const void *tfo_data, size_t tfo_datalen, ssize_t *tfo_nsend) {
     socklen_t addrlen = ((skaddr4_t *)addr)->sin_family == AF_INET ? sizeof(skaddr4_t) : sizeof(skaddr6_t);
     if (tfo_data && tfo_datalen && tfo_nsend) {
-        if ((*tfo_nsend = sendto(sockfd, tfo_data, tfo_datalen, MSG_FASTOPEN, addr, addrlen)) < 0 && errno != EINPROGRESS) return false;
+        if ((*tfo_nsend = sendto(sockfd, tfo_data, tfo_datalen, MSG_FASTOPEN, addr, addrlen)) < 0 && errno != EINPROGRESS) {
+            return false;
+        }
     } else {
-        if (connect(sockfd, addr, addrlen) < 0 && errno != EINPROGRESS) return false;
+        if (connect(sockfd, addr, addrlen) < 0 && errno != EINPROGRESS) {
+            return false;
+        }
     }
     return true;
 }

@@ -1,4 +1,3 @@
-#define _GNU_SOURCE
 #include "udp_proxy.h"
 #include "ctx.h"
 #include "netutils.h"
@@ -69,7 +68,9 @@ void udp_tproxy_recvmsg_cb(evloop_t *evloop, evio_t *tprecv_watcher, int revents
         return;
     }
 
-    if (retval == 0) return;
+    if (retval == 0) {
+        return;
+    }
 
     for (int i = 0; i < retval; i++) {
         handle_udp_socket_msg(evloop, tprecv_watcher, &msgs[i].msg_hdr, msgs[i].msg_len, g_udp_batch_buffer[i]);
@@ -122,7 +123,9 @@ static char *build_socks5_udp_header(char *payload_start, const char *fake_domai
         }
     }
 
-    if (out_headerlen) *out_headerlen = actual_headerlen;
+    if (out_headerlen) {
+        *out_headerlen = actual_headerlen;
+    }
     return header_start;
 }
 
@@ -411,7 +414,9 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
         }
 
 
-        if (del_context) ev_invoke(evloop, &del_context->idle_timer, EV_CUSTOM);
+        if (del_context) {
+            ev_invoke(evloop, &del_context->idle_timer, EV_CUSTOM);
+        }
         return;
     }
 
@@ -629,7 +634,8 @@ static void udp_socks5_recv_proxyresp_cb(evloop_t *evloop, evio_t *tcp_watcher, 
             context->idle_timer.data = (void *)sizeof(socks5_ipv6resp_t); // response_length
             *(uint16_t *)tcp_watcher->data = sizeof(socks5_ipv4resp_t); // response_nrecv
             return;
-        } else if (((socks5_ipv4resp_t *)(tcp_watcher->data + 2))->addrtype == SOCKS5_ADDRTYPE_DOMAIN) {
+        }
+        if (((socks5_ipv4resp_t *)(tcp_watcher->data + 2))->addrtype == SOCKS5_ADDRTYPE_DOMAIN) {
             LOGERR("[udp_socks5_recv_proxyresp_cb] SOCKS5 server returned unsupported DOMAIN type for UDP associatation");
             udp_socks5ctx_release(evloop, context);
             return;
@@ -653,10 +659,11 @@ static void udp_socks5_recv_proxyresp_cb(evloop_t *evloop, evio_t *tcp_watcher, 
 
     /* update the port to the udp relay port */
     bool relay_isipv4 = relay_addr.sin6_family == AF_INET;
-    if (relay_isipv4)
+    if (relay_isipv4) {
         ((skaddr4_t *)&relay_addr)->sin_port = relay_port;
-    else
+    } else {
         relay_addr.sin6_port = relay_port;
+    }
 
     /* connect to the socks5 udp relay endpoint */
     int udp_sockfd = new_udp_normal_sockfd(relay_addr.sin6_family);
@@ -789,7 +796,9 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, evio_t *udp_watcher,
         ssize_t nrecv = msgs[i].msg_len;
 
         /* Parse SOCKS5 header - inline logic from handle_udp_socks5_response */
-        if ((size_t)nrecv < sizeof(socks5_udp4msg_t)) continue;
+        if ((size_t)nrecv < sizeof(socks5_udp4msg_t)) {
+            continue;
+        }
 
         socks5_udp4msg_t *udp4msg = (void *)buffer;
         bool isipv4 = udp4msg->addrtype == SOCKS5_ADDRTYPE_IPV4;
@@ -798,10 +807,14 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, evio_t *udp_watcher,
         size_t headerlen;
         if (isipv4) {
             headerlen = sizeof(socks5_udp4msg_t);
-            if ((size_t)nrecv < headerlen) continue;
+            if ((size_t)nrecv < headerlen) {
+                continue;
+            }
         } else if (isipv6) {
             headerlen = sizeof(socks5_udp6msg_t);
-            if ((size_t)nrecv < headerlen) continue;
+            if ((size_t)nrecv < headerlen) {
+                continue;
+            }
         } else {
             continue;
         }
@@ -859,7 +872,9 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, evio_t *udp_watcher,
             evtimer_t *timer = &tproxyctx->idle_timer;
             ev_timer_init(timer, udp_tproxy_context_timeout_cb, 0, g_udp_idletimeout_sec);
             udp_tproxyctx_t *del_context = udp_tproxyctx_add(&g_udp_tproxyctx_table, tproxyctx);
-            if (del_context) ev_invoke(evloop, &del_context->idle_timer, EV_CUSTOM);
+            if (del_context) {
+                ev_invoke(evloop, &del_context->idle_timer, EV_CUSTOM);
+            }
         }
         ev_timer_again(evloop, &tproxyctx->idle_timer);
 
@@ -891,7 +906,9 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, evio_t *udp_watcher,
         batch_sends[send_count].msg.msg_hdr.msg_controllen = 0;
 
         send_count++;
-        if (send_count >= UDP_BATCH_SIZE) break;  /* Safety: prevent overflow */
+        if (send_count >= UDP_BATCH_SIZE) {
+            break;  /* Safety: prevent overflow */
+        }
     }
 
     /* Batch send using sendmmsg - group by tproxy socket */
@@ -899,7 +916,9 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, evio_t *udp_watcher,
         /* Sort by socket fd to maximize batch efficiency */
         /* Optimization: Use indirect sorting (indices) to avoid memcpy of large structures */
         uint16_t indices[UDP_BATCH_SIZE];
-        for (int k = 0; k < send_count; k++) indices[k] = k;
+        for (int k = 0; k < send_count; k++) {
+            indices[k] = k;
+        }
 
         int fd_groups = 0;
         for (int i = 0; i < send_count; ) {
@@ -1036,8 +1055,10 @@ static void udp_tproxy_context_timeout_cb(evloop_t *evloop, evtimer_t *idle_time
 }
 
 void udp_proxy_close_all_sessions(evloop_t *evloop) {
-    udp_socks5ctx_t *ctx, *tmp;
-    udp_tproxyctx_t *tctx, *ttmp;
+    udp_socks5ctx_t *ctx;
+    udp_socks5ctx_t *tmp;
+    udp_tproxyctx_t *tctx;
+    udp_tproxyctx_t *ttmp;
 
     LOGINF("[udp_proxy_close_all_sessions] cleaning up remaining sessions...");
 

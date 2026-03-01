@@ -1,4 +1,3 @@
-#define _GNU_SOURCE
 #include "logutils.h"
 #include <stdarg.h>
 

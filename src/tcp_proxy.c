@@ -1,4 +1,3 @@
-#define _GNU_SOURCE
 #include "tcp_proxy.h"
 #include "ctx.h"
 #include "netutils.h"
@@ -39,9 +38,9 @@ static void tcp_stream_payload_forward_cb(evloop_t *evloop, evio_t *watcher, int
 static inline tcp_context_t* get_tcpctx_by_watcher(evio_t *watcher) {
     if (watcher->events & EV_CUSTOM) {
         return (void *)watcher - offsetof(tcp_context_t, client_watcher);
-    } else {
-        return (void *)watcher - offsetof(tcp_context_t, socks5_watcher);
     }
+    return (void *)watcher - offsetof(tcp_context_t, socks5_watcher);
+
 }
 
 static inline void tcp_context_release(evloop_t *evloop, tcp_context_t *context, bool is_tcp_reset) {
@@ -57,15 +56,28 @@ static inline void tcp_context_release(evloop_t *evloop, tcp_context_t *context,
         close(socks5_watcher->fd);
     }
     // No need to free watcher.data as they point to embedded buffer
-    if (context->client_pipefd[0] != -1) close(context->client_pipefd[0]);
-    if (context->client_pipefd[1] != -1) close(context->client_pipefd[1]);
-    if (context->socks5_pipefd[0] != -1) close(context->socks5_pipefd[0]);
-    if (context->socks5_pipefd[1] != -1) close(context->socks5_pipefd[1]);
+    if (context->client_pipefd[0] != -1) {
+        close(context->client_pipefd[0]);
+    }
+    if (context->client_pipefd[1] != -1) {
+        close(context->client_pipefd[1]);
+    }
+    if (context->socks5_pipefd[0] != -1) {
+        close(context->socks5_pipefd[0]);
+    }
+    if (context->socks5_pipefd[1] != -1) {
+        close(context->socks5_pipefd[1]);
+    }
 
     /* Remove from session list */
-    if (context->next) context->next->prev = context->prev;
-    if (context->prev) context->prev->next = context->next;
-    else g_tcp_session_head = context->next;
+    if (context->next) {
+        context->next->prev = context->prev;
+    }
+    if (context->prev) {
+        context->prev->next = context->next;
+    } else {
+        g_tcp_session_head = context->next;
+    }
 
     mempool_free_sized(g_tcp_context_pool, context, sizeof(tcp_context_t));
 }
@@ -157,7 +169,9 @@ void tcp_tproxy_accept_cb(evloop_t *evloop, evio_t *accept_watcher, int revents 
     /* Add to session list (prepend) */
     context->prev = NULL;
     context->next = (tcp_context_t *)g_tcp_session_head;
-    if (context->next) context->next->prev = context;
+    if (context->next) {
+        context->next->prev = context;
+    }
     g_tcp_session_head = context;
 
     /* if (watcher->events & EV_CUSTOM); then it is client watcher; fi */
@@ -268,7 +282,9 @@ static void tcp_socks5_recv_authresp_cb(evloop_t *evloop, evio_t *socks5_watcher
     int ret = tcp_socks5_send_request("tcp_socks5_recv_authresp_cb", evloop, socks5_watcher, data, datalen);
     if (ret == 1) {
         ev_set_cb(socks5_watcher, g_socks5_usrpwd_requestlen ? tcp_socks5_recv_usrpwdresp_cb : tcp_socks5_recv_proxyresp_cb);
-        if (!g_socks5_usrpwd_requestlen) context->client_length = 5; // response_length (header prefix)
+        if (!g_socks5_usrpwd_requestlen) {
+            context->client_length = 5; // response_length (header prefix)
+        }
     } else if (ret == 0) {
         ev_io_stop(evloop, socks5_watcher);
         ev_io_init(socks5_watcher, g_socks5_usrpwd_requestlen ? tcp_socks5_send_usrpwdreq_cb : tcp_socks5_send_proxyreq_cb, socks5_watcher->fd, EV_WRITE);
@@ -425,7 +441,9 @@ static void tcp_stream_payload_forward_cb(evloop_t *evloop, evio_t *self_watcher
 
             ev_io_stop(evloop, self_watcher);
             ev_io_modify(self_watcher, self_watcher->events & ~EV_READ);
-            if (self_watcher->events & EV_WRITE) ev_io_start(evloop, self_watcher);
+            if (self_watcher->events & EV_WRITE) {
+                ev_io_start(evloop, self_watcher);
+            }
 
             ev_io_stop(evloop, peer_watcher);
             ev_io_modify(peer_watcher, peer_watcher->events | EV_WRITE);
@@ -446,7 +464,9 @@ DO_WRITE:
             }
             return;
         }
-        if (nsend == 0) return; // IGNORE
+        if (nsend == 0) {
+            return; // IGNORE
+        }
 
         remain_length -= (size_t)nsend;
         *(self_is_client ? &context->socks5_length : &context->client_length) = remain_length;
@@ -454,7 +474,9 @@ DO_WRITE:
         if (remain_length == 0) {
             ev_io_stop(evloop, self_watcher);
             ev_io_modify(self_watcher, self_watcher->events & ~EV_WRITE);
-            if (self_watcher->events & EV_READ) ev_io_start(evloop, self_watcher);
+            if (self_watcher->events & EV_READ) {
+                ev_io_start(evloop, self_watcher);
+            }
 
             ev_io_stop(evloop, peer_watcher);
             ev_io_modify(peer_watcher, peer_watcher->events | EV_READ);

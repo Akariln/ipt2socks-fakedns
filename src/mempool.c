@@ -1,4 +1,3 @@
-#define _GNU_SOURCE
 #include "mempool.h"
 #include "logutils.h"
 #include <stdlib.h>
@@ -63,14 +62,21 @@ struct memory_pool {
 static inline void dll_insert(block_header_t **head, block_header_t *node) {
     node->prev = NULL;
     node->next = *head;
-    if (*head) (*head)->prev = node;
+    if (*head) {
+        (*head)->prev = node;
+    }
     *head = node;
 }
 
 static inline void dll_remove(block_header_t **head, block_header_t *node) {
-    if (node->prev) node->prev->next = node->next;
-    else *head = node->next;
-    if (node->next) node->next->prev = node->prev;
+    if (node->prev) {
+        node->prev->next = node->next;
+    } else {
+        *head = node->next;
+    }
+    if (node->next) {
+        node->next->prev = node->prev;
+    }
     node->prev = node->next = NULL;
 }
 
@@ -123,7 +129,9 @@ memory_pool_t* mempool_create(size_t block_size, size_t initial_blocks, size_t m
     /* Pre-allocate initial blocks */
     for (size_t i = 0; i < initial_blocks && pool->pool_blocks < pool->max_blocks; i++) {
         block_header_t *header = alloc_physical_block(pool, pool->total_size, 0);
-        if (!header) break;
+        if (!header) {
+            break;
+        }
 
         /* Add to free list */
         header->next_free = pool->free_list;
@@ -140,7 +148,9 @@ memory_pool_t* mempool_create(size_t block_size, size_t initial_blocks, size_t m
 }
 
 void* mempool_alloc_sized(memory_pool_t *pool, size_t size) {
-    if (!pool) return NULL;
+    if (!pool) {
+        return NULL;
+    }
 
     /* Case A: Large object bypass */
     if (size > pool->block_size) {
@@ -161,7 +171,9 @@ void* mempool_alloc_sized(memory_pool_t *pool, size_t size) {
 
         for (size_t i = 0; i < expand_target; i++) {
             block_header_t *header = alloc_physical_block(pool, pool->total_size, 0);
-            if (!header) break;
+            if (!header) {
+                break;
+            }
 
             header->next_free = pool->free_list;
             pool->free_list = header;
@@ -208,7 +220,9 @@ void* mempool_calloc_sized(memory_pool_t *pool, size_t size) {
 
 void mempool_free_sized(memory_pool_t *pool, void *ptr, size_t size) {
     (void)size;  /* Size kept for API compatibility */
-    if (!pool || !ptr) return;
+    if (!pool || !ptr) {
+        return;
+    }
 
     block_header_t *header = (block_header_t *)((char *)ptr - sizeof(block_header_t));
 
@@ -241,7 +255,9 @@ void mempool_free_sized(memory_pool_t *pool, void *ptr, size_t size) {
 }
 
 size_t mempool_destroy(memory_pool_t *pool) {
-    if (!pool) return 0;
+    if (!pool) {
+        return 0;
+    }
 
     /* Calculate leaks */
     size_t pool_leaks = pool->pool_allocs - pool->pool_frees;
@@ -281,9 +297,19 @@ size_t mempool_destroy(memory_pool_t *pool) {
 void mempool_get_stats(memory_pool_t *pool, size_t *total_blocks,
                        size_t *free_blocks, size_t *alloc_count,
                        size_t *free_count) {
-    if (!pool) return;
-    if (total_blocks) *total_blocks = pool->pool_blocks;
-    if (free_blocks) *free_blocks = pool->free_count;
-    if (alloc_count) *alloc_count = pool->pool_allocs;
-    if (free_count) *free_count = pool->pool_frees;
+    if (!pool) {
+        return;
+    }
+    if (total_blocks) {
+        *total_blocks = pool->pool_blocks;
+    }
+    if (free_blocks) {
+        *free_blocks = pool->free_count;
+    }
+    if (alloc_count) {
+        *alloc_count = pool->pool_allocs;
+    }
+    if (free_count) {
+        *free_count = pool->pool_frees;
+    }
 }

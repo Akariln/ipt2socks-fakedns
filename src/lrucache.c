@@ -1,4 +1,3 @@
-#define _GNU_SOURCE
 #include "lrucache.h"
 
 static uint16_t g_main_cache_maxsize  = 256;  /* Main Table: Full Cone NAT */
@@ -37,7 +36,7 @@ void lrucache_set_maxsize(uint16_t maxsize) {
 #define DEFINE_LRU_ADD(func_name, type, key_field, maxsize_var)              \
 type* func_name(type **cache, type *entry) {                                 \
     MYHASH_ADD(*cache, entry, &entry->key_field, sizeof(entry->key_field));   \
-    if (MYHASH_CNT(*cache) > maxsize_var) {                                  \
+    if (MYHASH_CNT(*cache) > (maxsize_var)) {                                  \
         type *cur = NULL, *tmp = NULL;                                       \
         MYHASH_FOR(*cache, cur, tmp) {                                       \
             /* Do not call MYHASH_DEL here! The caller invokes the timeout callback */ \
