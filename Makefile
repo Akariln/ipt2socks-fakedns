@@ -6,6 +6,8 @@ CFLAGS = -std=c99 -Wall -Wextra -Wvla -pthread -O3 -flto=auto \
          -fno-strict-aliasing -ffunction-sections -fdata-sections \
          -DNDEBUG -MMD -MP $(EXTRA_CFLAGS)
 
+CFLAGS += -D_GNU_SOURCE
+
 LDFLAGS = -pthread -O3 -flto=auto -Wl,--gc-sections -s $(EXTRA_LDFLAGS)
 
 LDLIBS = -lm
