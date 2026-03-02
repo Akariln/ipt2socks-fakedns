@@ -341,7 +341,6 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
             mempool_free_sized(g_udp_context_pool, context, sizeof(*context));
             return;
         }
-        context->idle_timer.data = (void *)(SOCKS5_RESPONSE_MAX_SIZE - 2);
         *(uint16_t *)context->tcp_watcher.data = tfo_nsend; /* nsend or nrecv */
 
         /* tunnel not ready if udp_watcher->data != NULL */
@@ -376,7 +375,7 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
 
         evtimer_t *timer = &context->idle_timer;
         ev_timer_init(timer, udp_socks5_context_timeout_cb, 0, g_udp_idletimeout_sec);
-        timer->data = (void *)sizeof(socks5_ipv4resp_t); // response_length
+        timer->data = (void *)5; // response_length (header prefix)
         ev_timer_again(evloop, timer);
 
         udp_socks5ctx_t *del_context = NULL;
@@ -625,22 +624,44 @@ static void udp_socks5_recv_proxyresp_cb(evloop_t *evloop, evio_t *tcp_watcher, 
     if (udp_socks5_recv_response("udp_socks5_recv_proxyresp_cb", evloop, tcp_watcher, tcp_watcher->data + 2, (uintptr_t)context->idle_timer.data) != 1) {
         return;
     }
-    if ((uintptr_t)context->idle_timer.data == sizeof(socks5_ipv4resp_t)) {
-        if (!socks5_proxy_response_check("udp_socks5_recv_proxyresp_cb", tcp_watcher->data + 2)) {
+    /* If we just read the first 5 bytes (Header prefix) */
+    if ((uintptr_t)context->idle_timer.data == 5) {
+        uint8_t atype = ((socks5_ipv4resp_t *)(tcp_watcher->data + 2))->addrtype;
+        size_t total_len;
+
+        if (atype == SOCKS5_ADDRTYPE_IPV4) {
+            total_len = sizeof(socks5_ipv4resp_t); // 10
+        } else if (atype == SOCKS5_ADDRTYPE_IPV6) {
+            total_len = sizeof(socks5_ipv6resp_t); // 22
+        } else {
+            LOGERR("[udp_socks5_recv_proxyresp_cb] unsupported address type: 0x%02x", atype);
             udp_socks5ctx_release(evloop, context);
             return;
         }
-        if (((socks5_ipv4resp_t *)(tcp_watcher->data + 2))->addrtype == SOCKS5_ADDRTYPE_IPV6) {
-            context->idle_timer.data = (void *)sizeof(socks5_ipv6resp_t); // response_length
-            *(uint16_t *)tcp_watcher->data = sizeof(socks5_ipv4resp_t); // response_nrecv
-            return;
-        }
-        if (((socks5_ipv4resp_t *)(tcp_watcher->data + 2))->addrtype == SOCKS5_ADDRTYPE_DOMAIN) {
-            LOGERR("[udp_socks5_recv_proxyresp_cb] SOCKS5 server returned unsupported DOMAIN type for UDP associatation");
+
+        if (total_len > SOCKS5_RESPONSE_MAX_SIZE - 2) {
+            LOGERR("[udp_socks5_recv_proxyresp_cb] response too large: %zu", total_len);
             udp_socks5ctx_release(evloop, context);
             return;
+        }
+
+        if (total_len > 5) {
+            /* Update length targets */
+            context->idle_timer.data = (void *)total_len;
+            *(uint16_t *)tcp_watcher->data = 5; /* We already have 5 bytes */
+
+            /* Attempt to read the rest immediately */
+            if (udp_socks5_recv_response("udp_socks5_recv_proxyresp_cb", evloop, tcp_watcher, tcp_watcher->data + 2, total_len) != 1) {
+                return;
+            }
         }
     }
+
+    if (!socks5_proxy_response_check("udp_socks5_recv_proxyresp_cb", tcp_watcher->data + 2)) {
+        udp_socks5ctx_release(evloop, context);
+        return;
+    }
+
     portno_t relay_port;
     uint8_t atype = ((socks5_ipv4resp_t *)(tcp_watcher->data + 2))->addrtype;
     if (atype == SOCKS5_ADDRTYPE_IPV4) {

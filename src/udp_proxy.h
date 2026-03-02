@@ -11,7 +11,7 @@
 #define MEMPOOL_INITIAL_SIZE  256
 
 /* UDP Queue */
-#define UDP_QUEUE_MAX_DEPTH 64
+#define UDP_QUEUE_MAX_DEPTH 16
 
 /* Maximum SOCKS5 UDP header size */
 #define MAX_DOMAIN_LEN         255
