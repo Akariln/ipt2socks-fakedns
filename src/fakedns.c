@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <arpa/inet.h>
 #include <errno.h>
 #include <unistd.h>
@@ -140,8 +141,23 @@ static uint32_t fakedns_lookup_domain(const char *domain, size_t len) {
     uint32_t offset = offset_start;
     uint32_t now = (uint32_t)time(NULL);
 
-    // Phase 1: Try read lock first for fast path (cache hit with valid TTL)
-    pthread_rwlock_rdlock(&g_fakedns_rwlock);
+    /*
+     * Phase 1: Lock-free fast path (cache hit with valid TTL)
+     *
+     * In the current single-writer architecture, fakedns_lookup_domain is
+     * the sole writer and is called exclusively from the DNS server event
+     * loop thread. The rdlock here would only conflict with wrlock, but:
+     *   - Phase 2 wrlock is on the same thread (sequential, never concurrent)
+     *   - fakedns_load wrlock runs only at init (before any concurrent access)
+     *   - fakedns_reverse_lookup / fakedns_save hold rdlocks (no conflict)
+     *
+     * Therefore the rdlock is a no-op and is commented out for performance.
+     *
+     * [MULTI-WRITER EXTENSION] If fakedns_lookup_domain is ever called from
+     * multiple threads, uncomment the rdlock/unlock pairs below to restore
+     * Phase 1 read-lock protection against concurrent Phase 2 writes.
+     */
+    // pthread_rwlock_rdlock(&g_fakedns_rwlock);
 
     for (uint32_t i = 0; i < g_max_probes; ++i) {
         uint32_t ip_host = g_fakeip_net_host + offset;
@@ -160,21 +176,21 @@ static uint32_t fakedns_lookup_domain(const char *domain, size_t len) {
 
             // Lazy update: only update if TTL remaining < 30%
             if (remaining > FAKEDNS_TTL_REFRESH_THRESHOLD) {
-                pthread_rwlock_unlock(&g_fakedns_rwlock);
+                // pthread_rwlock_unlock(&g_fakedns_rwlock);
                 return ip_net;
             }
 
             __atomic_store_n(&entry->expire, now + FAKEDNS_TTL, __ATOMIC_RELAXED);
 
-            pthread_rwlock_unlock(&g_fakedns_rwlock);
+            // pthread_rwlock_unlock(&g_fakedns_rwlock);
             return ip_net;
-        } else {
-            // Collision, continue probing (Double Hashing)
-            offset = (offset + step) & pool_mask;
         }
+        // Collision, continue probing (Double Hashing)
+        offset = (offset + step) & pool_mask;
+
     }
 
-    pthread_rwlock_unlock(&g_fakedns_rwlock);
+    // pthread_rwlock_unlock(&g_fakedns_rwlock);
 
     // Phase 2: Acquire write lock for insert/update
     pthread_rwlock_wrlock(&g_fakedns_rwlock);
@@ -235,39 +251,40 @@ static uint32_t fakedns_lookup_domain(const char *domain, size_t len) {
 
             pthread_rwlock_unlock(&g_fakedns_rwlock);
             return ip_net;
-        }             // Slot occupied
+        }
+        // Slot occupied
         if (strcmp(entry->domain, domain) == 0) {
             // Match confirmed, update TTL
             entry->expire = now + FAKEDNS_TTL;
             pthread_rwlock_unlock(&g_fakedns_rwlock);
 
             return ip_net;
-        } else {
-            // Collision
-            // Strategy A: Overwrite if expired
-            int32_t remaining = (int32_t)(entry->expire - now);
-            if (remaining < 0) {
-                IF_VERBOSE {
-                    LOGINF("[fakedns] overwrite expired entry: %s -> %s (IP: %u.%u.%u.%u)",
-                           entry->domain, domain,
-                           ((uint8_t*)&ip_net)[0], ((uint8_t*)&ip_net)[1], ((uint8_t*)&ip_net)[2], ((uint8_t*)&ip_net)[3]);
-                }
-
-                // Reset entry for new domain
-                size_t copy_len = len >= sizeof(entry->domain) ? sizeof(entry->domain) - 1 : len;
-                memcpy(entry->domain, domain, copy_len);
-                entry->domain[copy_len] = '\0';
-                entry->expire = now + FAKEDNS_TTL;
-                // Atomically increment version so all threaded MRU caches instantly know it's dirty
-                __atomic_add_fetch(&entry->version, 1, __ATOMIC_RELEASE);
-
-                pthread_rwlock_unlock(&g_fakedns_rwlock);
-                return ip_net;
+        }
+        // Collision
+        // Strategy A: Overwrite if expired
+        int32_t remaining = (int32_t)(entry->expire - now);
+        if (remaining < 0) {
+            IF_VERBOSE {
+                LOGINF("[fakedns] overwrite expired entry: %s -> %s (IP: %u.%u.%u.%u)",
+                       entry->domain, domain,
+                       ((uint8_t*)&ip_net)[0], ((uint8_t*)&ip_net)[1], ((uint8_t*)&ip_net)[2], ((uint8_t*)&ip_net)[3]);
             }
 
-            // Still valid, linear probe (Double Hashing)
-            offset = (offset + step) & pool_mask;
+            // Reset entry for new domain
+            size_t copy_len = len >= sizeof(entry->domain) ? sizeof(entry->domain) - 1 : len;
+            memcpy(entry->domain, domain, copy_len);
+            entry->domain[copy_len] = '\0';
+            entry->expire = now + FAKEDNS_TTL;
+            // Atomically increment version so all threaded MRU caches instantly know it's dirty
+            __atomic_add_fetch(&entry->version, 1, __ATOMIC_RELEASE);
+
+            pthread_rwlock_unlock(&g_fakedns_rwlock);
+            return ip_net;
         }
+
+        // Still valid, linear probe (Double Hashing)
+        offset = (offset + step) & pool_mask;
+
 
     }
 
@@ -392,6 +409,97 @@ bool fakedns_reverse_lookup(uint32_t ip, char *buffer, size_t buf_len) {
         evicted->valid = true;
     }
     return found;
+}
+
+/**
+ * Parse an in-addr.arpa PTR name into a network-byte-order IPv4 address.
+ * Example: "1.0.0.10.in-addr.arpa" -> 10.0.0.1 (network order)
+ */
+static bool fakedns_parse_ptr_name(const char *name, size_t len, uint32_t *ip_out) {
+    /* ".in-addr.arpa" = 13 chars; shortest valid: "0.0.0.0.in-addr.arpa" = 20 */
+    if (len < 20 || len > 28) {
+        return false;
+    }
+
+    /* Case-insensitive suffix check (RFC 1035 §2.3.3) */
+    if (strncasecmp(name + len - 13, ".in-addr.arpa", 13) != 0) {
+        return false;
+    }
+
+    /* Extract IP-part before suffix into a mutable buffer */
+    size_t ip_len = len - 13;
+    char ip_buf[16]; /* max "255.255.255.255" = 15 + NUL */
+    memcpy(ip_buf, name, ip_len);
+    ip_buf[ip_len] = '\0';
+
+    /* Parse exactly 4 decimal octets separated by '.' */
+    uint8_t octets[4];
+    int idx = 0;
+    char *saveptr;
+    char *tok = strtok_r(ip_buf, ".", &saveptr);
+
+    while (tok && idx < 4) {
+        if (tok[0] == '\0') {
+            return false; /* empty label */
+        }
+        if (tok[0] == '0' && tok[1] != '\0') {
+            return false; /* reject leading zeros */
+        }
+        char *endptr;
+        unsigned long val = strtoul(tok, &endptr, 10);
+        if (*endptr != '\0' || val > 255 || tok == endptr) {
+            return false;
+        }
+        octets[idx++] = (uint8_t)val;
+        tok = strtok_r(NULL, ".", &saveptr);
+    }
+
+    if (idx != 4 || tok != NULL) {
+        return false;
+    }
+
+    /* Reverse: in-addr.arpa "1.0.0.10" -> IP 10.0.0.1 */
+    uint32_t ip_host = ((uint32_t)octets[3] << 24) | ((uint32_t)octets[2] << 16) |
+                       ((uint32_t)octets[1] << 8)  | octets[0];
+    *ip_out = htonl(ip_host);
+    return true;
+}
+
+/**
+ * Encode a dotted domain name into DNS wire format.
+ * Example: "example.com" -> "\x07example\x03com\x00"
+ * Returns bytes written, or 0 on error.
+ */
+static size_t fakedns_encode_dns_name(const char *domain, uint8_t *out, size_t outlen) {
+    size_t pos = 0;
+    const char *p = domain;
+
+    while (*p) {
+        const char *dot = strchr(p, '.');
+        size_t label_len = dot ? (size_t)(dot - p) : strlen(p);
+
+        if (label_len == 0 || label_len > 63) {
+            return 0; /* RFC 1035 §2.3.4 */
+        }
+        if (pos + 1 + label_len + 1 > outlen) {
+            return 0; /* +1 len byte, +1 for final NUL */
+        }
+
+        out[pos++] = (uint8_t)label_len;
+        memcpy(out + pos, p, label_len);
+        pos += label_len;
+
+        p += label_len;
+        if (*p == '.') {
+            p++;
+        }
+    }
+
+    if (pos + 1 > outlen) {
+        return 0;
+    }
+    out[pos++] = 0; /* root label */
+    return pos;
 }
 
 /* DNS Packet Layout
@@ -552,6 +660,52 @@ size_t fakedns_process_query(const uint8_t *query, size_t qlen, uint8_t *buffer,
     } else if (qtype == 28) { /* AAAA Record */
         // Return NOERROR with 0 Answers (Handling dual-stack fallback)
         LOGINF("[fakedns] query: AAAA %s -> NODATA", domain);
+    } else if (qtype == 12) { /* PTR Record */
+        uint32_t ptr_ip;
+        if (fakedns_parse_ptr_name(domain, dom_len, &ptr_ip)) {
+            char ptr_domain[FAKEDNS_MAX_DOMAIN_LEN];
+            if (fakedns_reverse_lookup(ptr_ip, ptr_domain, sizeof(ptr_domain))) {
+                /* Encode domain name to DNS wire format */
+                uint8_t rdata[FAKEDNS_MAX_DOMAIN_LEN + 2];
+                size_t rdata_len = fakedns_encode_dns_name(ptr_domain, rdata, sizeof(rdata));
+                if (rdata_len > 0) {
+                    /* 2(Ptr) + 2(Type) + 2(Class) + 4(TTL) + 2(RDLength) = 12 fixed */
+                    if (resp_len + 12 + rdata_len > buflen) {
+                        return 0;
+                    }
+
+                    buffer[resp_len++] = 0xC0;
+                    buffer[resp_len++] = 0x0C; /* Name pointer to QNAME at offset 12 */
+
+                    buffer[resp_len++] = 0x00;
+                    buffer[resp_len++] = 0x0C; /* Type PTR */
+                    buffer[resp_len++] = 0x00;
+                    buffer[resp_len++] = 0x01; /* Class IN */
+
+                    /* TTL */
+                    uint32_t ttl_n = htonl(FAKEDNS_TTL);
+                    memcpy(buffer + resp_len, &ttl_n, 4);
+                    resp_len += 4;
+
+                    /* RDLENGTH */
+                    buffer[resp_len++] = (rdata_len >> 8) & 0xFF;
+                    buffer[resp_len++] = rdata_len & 0xFF;
+
+                    /* RDATA: encoded domain name */
+                    memcpy(buffer + resp_len, rdata, rdata_len);
+                    resp_len += rdata_len;
+
+                    /* Set ANCOUNT = 1 */
+                    buffer[7] = 1;
+
+                    IF_VERBOSE {
+                        LOGINF("[fakedns] query: PTR %s -> %s", domain, ptr_domain);
+                    }
+                }
+            }
+        } else if (dom_len > 9 && strncasecmp(domain + dom_len - 9, ".ip6.arpa", 9) == 0) {
+            LOGINF("[fakedns] query: PTR %s -> NODATA", domain);
+        }
     } else {
         // Other types -> NODATA
     }
