@@ -140,9 +140,9 @@ memory_pool_t* mempool_create(size_t block_size, size_t initial_blocks, size_t m
         pool->free_count++;
     }
 
-    LOG_ALWAYS_INF("[mempool] created: block_size=%zu, initial=%zu, max=%zu, memory=%zu KB",
-                   pool->total_size, pool->pool_blocks, pool->max_blocks,
-                   pool->pool_blocks * (sizeof(block_header_t) + pool->total_size) / 1024);
+    LOGINF("[mempool] created: block_size=%zu, initial=%zu, max=%zu, memory=%zu KB",
+           pool->total_size, pool->pool_blocks, pool->max_blocks,
+           pool->pool_blocks * (sizeof(block_header_t) + pool->total_size) / 1024);
 
     return pool;
 }
@@ -264,11 +264,11 @@ size_t mempool_destroy(memory_pool_t *pool) {
     size_t bypass_leaks = pool->bypass_allocs - pool->bypass_frees;
     size_t total_leaks = pool_leaks + bypass_leaks;
 
-    LOG_ALWAYS_INF("[mempool] destroy: pool_blocks=%zu, free=%zu, "
-                   "pool_alloc=%zu, pool_free=%zu, bypass_alloc=%zu, bypass_free=%zu, leaks=%zu",
-                   pool->pool_blocks, pool->free_count,
-                   pool->pool_allocs, pool->pool_frees,
-                   pool->bypass_allocs, pool->bypass_frees, total_leaks);
+    LOGINF("[mempool] destroy: pool_blocks=%zu, free=%zu, "
+           "pool_alloc=%zu, pool_free=%zu, bypass_alloc=%zu, bypass_free=%zu, leaks=%zu",
+           pool->pool_blocks, pool->free_count,
+           pool->pool_allocs, pool->pool_frees,
+           pool->bypass_allocs, pool->bypass_frees, total_leaks);
 
     if (total_leaks > 0) {
         LOGWAR("[mempool] detected leaks: pool=%zu, bypass=%zu", pool_leaks, bypass_leaks);
