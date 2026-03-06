@@ -255,7 +255,7 @@ static uint32_t fakedns_lookup_domain(const char *domain, size_t len) {
         // Slot occupied
         if (strcmp(entry->domain, domain) == 0) {
             // Match confirmed, update TTL
-            entry->expire = now + FAKEDNS_TTL;
+            __atomic_store_n(&entry->expire, now + FAKEDNS_TTL, __ATOMIC_RELAXED);
             pthread_rwlock_unlock(&g_fakedns_rwlock);
 
             return ip_net;
@@ -274,7 +274,7 @@ static uint32_t fakedns_lookup_domain(const char *domain, size_t len) {
             size_t copy_len = len >= sizeof(entry->domain) ? sizeof(entry->domain) - 1 : len;
             memcpy(entry->domain, domain, copy_len);
             entry->domain[copy_len] = '\0';
-            entry->expire = now + FAKEDNS_TTL;
+            __atomic_store_n(&entry->expire, now + FAKEDNS_TTL, __ATOMIC_RELAXED);
             // Atomically increment version so all threaded MRU caches instantly know it's dirty
             __atomic_add_fetch(&entry->version, 1, __ATOMIC_RELEASE);
 
@@ -698,9 +698,7 @@ size_t fakedns_process_query(const uint8_t *query, size_t qlen, uint8_t *buffer,
                     /* Set ANCOUNT = 1 */
                     buffer[7] = 1;
 
-                    IF_VERBOSE {
-                        LOGINF("[fakedns] query: PTR %s -> %s", domain, ptr_domain);
-                    }
+                    LOGINF("[fakedns] query: PTR %s -> %s", domain, ptr_domain);
                 }
             }
         } else if (dom_len > 9 && strncasecmp(domain + dom_len - 9, ".ip6.arpa", 9) == 0) {
