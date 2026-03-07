@@ -56,6 +56,7 @@ extern skaddr6_t g_server_skaddr;
 extern uint8_t g_tcp_syncnt_max;
 
 extern uint16_t g_udp_idletimeout_sec;
+#define UDP_TPROXY_TIMEOUT_SEC 10
 extern __thread udp_socks5ctx_t *g_udp_socks5ctx_table;
 extern __thread udp_socks5ctx_t *g_udp_fork_table;
 extern __thread udp_tproxyctx_t *g_udp_tproxyctx_table;
