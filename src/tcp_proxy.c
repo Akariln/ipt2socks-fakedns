@@ -413,13 +413,21 @@ static void tcp_stream_payload_forward_cb(evloop_t *evloop, evio_t *self_watcher
     bool self_is_client = self_watcher->events & EV_CUSTOM;
     tcp_context_t *context = get_tcpctx_by_watcher(self_watcher);
     evio_t *peer_watcher = self_is_client ? &context->socks5_watcher : &context->client_watcher;
+    bool *self_eof = self_is_client ? &context->client_eof : &context->socks5_eof;
+    bool *peer_eof = self_is_client ? &context->socks5_eof : &context->client_eof;
+    uint16_t *self_length = self_is_client ? &context->client_length : &context->socks5_length;
+    uint16_t *peer_length = self_is_client ? &context->socks5_length : &context->client_length;
 
     if (revents & EV_READ) {
         int *self_pipefd = self_is_client ? context->client_pipefd : context->socks5_pipefd;
         ssize_t nrecv = splice(self_watcher->fd, NULL, self_pipefd[1], NULL, TCP_SPLICE_MAXLEN, SPLICE_F_MOVE | SPLICE_F_NONBLOCK);
         if (nrecv < 0) {
             if (errno != EAGAIN && errno != EWOULDBLOCK) {
-                IF_VERBOSE {
+                if (errno == ECONNRESET) {
+                    IF_VERBOSE {
+                        LOGINF("[tcp_stream_payload_forward_cb] recv from %s stream: %s, cascade RST", self_is_client ? "client" : "socks5", strerror(errno));
+                    }
+                } else {
                     LOGERR("[tcp_stream_payload_forward_cb] recv from %s stream: %s", self_is_client ? "client" : "socks5", strerror(errno));
                 }
                 tcp_context_release(evloop, context, true);
@@ -428,65 +436,94 @@ static void tcp_stream_payload_forward_cb(evloop_t *evloop, evio_t *self_watcher
             goto DO_WRITE; // EAGAIN
         }
         if (nrecv == 0) {
-            LOGINF("[tcp_stream_payload_forward_cb] recv FIN from %s stream, release ctx", self_is_client ? "client" : "socks5");
-            tcp_context_release(evloop, context, false);
-            return;
-        }
-
-        ssize_t nsend = splice(self_pipefd[0], NULL, peer_watcher->fd, NULL, nrecv, SPLICE_F_MOVE | SPLICE_F_NONBLOCK);
-        if (nsend < 0) {
-            if (errno != EAGAIN && errno != EWOULDBLOCK) {
-                LOGERR("[tcp_stream_payload_forward_cb] send to %s stream: %s", self_is_client ? "socks5" : "client", strerror(errno));
-                tcp_context_release(evloop, context, true);
-                return;
+            IF_VERBOSE {
+                LOGINF("[tcp_stream_payload_forward_cb] recv FIN from %s stream", self_is_client ? "client" : "socks5");
             }
-            nsend = 0; // EAGAIN
-        }
-        if (nsend < nrecv) {
-            *(self_is_client ? &context->client_length : &context->socks5_length) = (size_t)(nrecv - nsend); // remain_length
-
+            *self_eof = true;
             ev_io_stop(evloop, self_watcher);
             ev_io_modify(self_watcher, self_watcher->events & ~EV_READ);
             if (self_watcher->events & EV_WRITE) {
                 ev_io_start(evloop, self_watcher);
             }
 
-            ev_io_stop(evloop, peer_watcher);
-            ev_io_modify(peer_watcher, peer_watcher->events | EV_WRITE);
-            ev_io_start(evloop, peer_watcher);
+            if (*self_length == 0) {
+                shutdown(peer_watcher->fd, SHUT_WR);
+            }
+        } else {
+            ssize_t nsend = splice(self_pipefd[0], NULL, peer_watcher->fd, NULL, nrecv, SPLICE_F_MOVE | SPLICE_F_NONBLOCK);
+            if (nsend < 0) {
+                if (errno != EAGAIN && errno != EWOULDBLOCK) {
+                    if (errno == EPIPE || errno == ECONNRESET) {
+                        IF_VERBOSE {
+                            LOGINF("[tcp_stream_payload_forward_cb] send to %s stream: %s, cascade RST", self_is_client ? "socks5" : "client", strerror(errno));
+                        }
+                    } else {
+                        LOGERR("[tcp_stream_payload_forward_cb] send to %s stream: %s", self_is_client ? "socks5" : "client", strerror(errno));
+                    }
+                    tcp_context_release(evloop, context, true);
+                    return;
+                }
+                nsend = 0; // EAGAIN
+            }
+            if (nsend < nrecv) {
+                *self_length = (size_t)(nrecv - nsend); // remain_length
+
+                ev_io_stop(evloop, self_watcher);
+                ev_io_modify(self_watcher, self_watcher->events & ~EV_READ);
+                if (self_watcher->events & EV_WRITE) {
+                    ev_io_start(evloop, self_watcher);
+                }
+
+                ev_io_stop(evloop, peer_watcher);
+                ev_io_modify(peer_watcher, peer_watcher->events | EV_WRITE);
+                ev_io_start(evloop, peer_watcher);
+            }
         }
     }
 
 DO_WRITE:
     if (revents & EV_WRITE) {
         int *peer_pipefd = self_is_client ? context->socks5_pipefd : context->client_pipefd;
-        uint16_t remain_length = self_is_client ? context->socks5_length : context->client_length;
 
-        ssize_t nsend = splice(peer_pipefd[0], NULL, self_watcher->fd, NULL, remain_length, SPLICE_F_MOVE | SPLICE_F_NONBLOCK);
+        ssize_t nsend = splice(peer_pipefd[0], NULL, self_watcher->fd, NULL, *peer_length, SPLICE_F_MOVE | SPLICE_F_NONBLOCK);
         if (nsend < 0) {
             if (errno != EAGAIN && errno != EWOULDBLOCK) {
-                LOGERR("[tcp_stream_payload_forward_cb] send to %s stream: %s", self_is_client ? "client" : "socks5", strerror(errno));
+                if (errno == EPIPE || errno == ECONNRESET) {
+                    IF_VERBOSE {
+                        LOGINF("[tcp_stream_payload_forward_cb] send to %s stream: %s, cascade RST", self_is_client ? "client" : "socks5", strerror(errno));
+                    }
+                } else {
+                    LOGERR("[tcp_stream_payload_forward_cb] send to %s stream: %s", self_is_client ? "client" : "socks5", strerror(errno));
+                }
                 tcp_context_release(evloop, context, true);
             }
             return;
         }
-        if (nsend == 0) {
-            return; // IGNORE
-        }
+        if (nsend > 0) {
+            *peer_length -= (uint16_t)nsend;
 
-        remain_length -= (size_t)nsend;
-        *(self_is_client ? &context->socks5_length : &context->client_length) = remain_length;
+            if (*peer_length == 0) {
+                ev_io_stop(evloop, self_watcher);
+                ev_io_modify(self_watcher, self_watcher->events & ~EV_WRITE);
+                if (self_watcher->events & EV_READ) {
+                    ev_io_start(evloop, self_watcher);
+                }
 
-        if (remain_length == 0) {
-            ev_io_stop(evloop, self_watcher);
-            ev_io_modify(self_watcher, self_watcher->events & ~EV_WRITE);
-            if (self_watcher->events & EV_READ) {
-                ev_io_start(evloop, self_watcher);
+                if (!*peer_eof) {
+                    ev_io_stop(evloop, peer_watcher);
+                    ev_io_modify(peer_watcher, peer_watcher->events | EV_READ);
+                    ev_io_start(evloop, peer_watcher);
+                } else {
+                    shutdown(self_watcher->fd, SHUT_WR);
+                }
             }
-
-            ev_io_stop(evloop, peer_watcher);
-            ev_io_modify(peer_watcher, peer_watcher->events | EV_READ);
-            ev_io_start(evloop, peer_watcher);
         }
+    }
+
+    if (context->client_eof && context->socks5_eof && context->client_length == 0 && context->socks5_length == 0) {
+        IF_VERBOSE {
+            LOGINF("[tcp_stream_payload_forward_cb] both streams are EOF and pipes are empty, release ctx");
+        }
+        tcp_context_release(evloop, context, false);
     }
 }

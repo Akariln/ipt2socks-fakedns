@@ -4,6 +4,7 @@
 #include "../libev/ev.h"
 
 #include <stdint.h>
+#include <stdbool.h>
 
 #define TCP_SPLICE_MAXLEN 65535 /* uint16_t: 0~65535 */
 
@@ -14,6 +15,8 @@ typedef struct tcp_context_t {
     int      socks5_pipefd[2]; // socks5 pipe buffer
     uint16_t client_length;    // nrecv/nsend, npipe
     uint16_t socks5_length;    // nrecv/nsend, npipe
+    bool     client_eof;       // self eof
+    bool     socks5_eof;       // peer eof
     uint8_t  handshake_buf[320]; // Buffer for handshake messages
     struct tcp_context_t *prev;  // Doubly linked list for cleanup
     struct tcp_context_t *next;
