@@ -1,8 +1,11 @@
 #include "lrucache.h"
 
-static uint16_t g_main_cache_maxsize  = 256;  /* Main Table: Full Cone NAT */
-static uint16_t g_fork_cache_maxsize  = 256;  /* Fork Table: Symmetric NAT / FakeDNS */
-static uint16_t g_tproxy_cache_maxsize = 256; /* TProxy Table: Response routing */
+#define FORK_SIZE_MULTIPLIER   2
+#define TPROXY_SIZE_MULTIPLIER 4
+
+static uint16_t g_main_cache_maxsize   = 256;
+static uint16_t g_fork_cache_maxsize   = 256 * FORK_SIZE_MULTIPLIER;
+static uint16_t g_tproxy_cache_maxsize = 256 * TPROXY_SIZE_MULTIPLIER;
 
 uint16_t lrucache_get_main_maxsize(void) {
     return g_main_cache_maxsize;
@@ -14,21 +17,21 @@ uint16_t lrucache_get_tproxy_maxsize(void) {
     return g_tproxy_cache_maxsize;
 }
 
-void lrucache_set_main_maxsize(uint16_t maxsize) {
-    g_main_cache_maxsize = maxsize;
-}
-void lrucache_set_fork_maxsize(uint16_t maxsize) {
-    g_fork_cache_maxsize = maxsize;
-}
-void lrucache_set_tproxy_maxsize(uint16_t maxsize) {
-    g_tproxy_cache_maxsize = maxsize;
-}
+/* Smart proportional sizing:
+ * Main Table stays at base capacity.
+ * Fork Table handles concurrent connection splitting, multiplying capacity (x2)
+ * TProxy Table handles short-lived global proxy storms, expanding further (x4)
+ * and is aggressively reclaimed by a short timeout mechanism.
+ */
+void lrucache_set_maxsize(uint16_t base_size) {
+    g_main_cache_maxsize = base_size;
 
-/* Convenience: set all caches to the same size */
-void lrucache_set_maxsize(uint16_t maxsize) {
-    g_main_cache_maxsize = maxsize;
-    g_fork_cache_maxsize = maxsize;
-    g_tproxy_cache_maxsize = maxsize;
+    // Use unsigned int to prevent overflow of uint16_t 65535 boundary
+    unsigned int fork_size = base_size * FORK_SIZE_MULTIPLIER;
+    g_fork_cache_maxsize = (fork_size > 65535) ? 65535 : (uint16_t)fork_size;
+
+    unsigned int tproxy_size = base_size * TPROXY_SIZE_MULTIPLIER;
+    g_tproxy_cache_maxsize = (tproxy_size > 65535) ? 65535 : (uint16_t)tproxy_size;
 }
 
 /* ── LRU operation templates ── */

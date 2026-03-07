@@ -599,14 +599,16 @@ static void* run_event_loop(void *arg) {
 
     /* Initialize memory pools (thread-local) */
     /* Context pool serves: Main table + Fork table (socks5ctx only) */
-    size_t context_initial_blocks = lrucache_get_main_maxsize() + lrucache_get_fork_maxsize();
-    if (context_initial_blocks < MEMPOOL_INITIAL_SIZE) {
-        context_initial_blocks = MEMPOOL_INITIAL_SIZE;
+    size_t context_max_blocks = lrucache_get_main_maxsize() + lrucache_get_fork_maxsize();
+    size_t context_initial_blocks = MEMPOOL_INITIAL_SIZE;
+    if (context_initial_blocks > context_max_blocks) {
+        context_initial_blocks = context_max_blocks;
     }
 
-    size_t tproxy_initial_blocks = lrucache_get_tproxy_maxsize();
-    if (tproxy_initial_blocks < MEMPOOL_INITIAL_SIZE) {
-        tproxy_initial_blocks = MEMPOOL_INITIAL_SIZE;
+    size_t tproxy_max_blocks = lrucache_get_tproxy_maxsize();
+    size_t tproxy_initial_blocks = MEMPOOL_INITIAL_SIZE;
+    if (tproxy_initial_blocks > tproxy_max_blocks) {
+        tproxy_initial_blocks = tproxy_max_blocks;
     }
 
     /* Determine if this thread should handle UDP */
@@ -618,7 +620,7 @@ static void* run_event_loop(void *arg) {
         g_udp_packet_pool = mempool_create(
                                 MEMPOOL_BLOCK_SIZE,
                                 128,
-                                16384
+                                65535
                             );
         if (!g_udp_packet_pool) {
             LOGERR("[run_event_loop] failed to create packet memory pool");
@@ -630,7 +632,7 @@ static void* run_event_loop(void *arg) {
         g_udp_context_pool = mempool_create(
                                  sizeof(udp_socks5ctx_t),
                                  context_initial_blocks,
-                                 context_initial_blocks * 2
+                                 context_max_blocks     // Cap to actual table dimensions
                              );
         if (!g_udp_context_pool) {
             LOGERR("[run_event_loop] failed to create context memory pool");
@@ -642,7 +644,7 @@ static void* run_event_loop(void *arg) {
         g_udp_tproxy_pool = mempool_create(
                                 sizeof(udp_tproxyctx_t),
                                 tproxy_initial_blocks,
-                                tproxy_initial_blocks * 2
+                                tproxy_max_blocks      // Cap to actual table dimensions
                             );
         if (!g_udp_tproxy_pool) {
             LOGERR("[run_event_loop] failed to create tproxy memory pool");
@@ -656,7 +658,7 @@ static void* run_event_loop(void *arg) {
         g_tcp_context_pool = mempool_create(
                                  sizeof(tcp_context_t),
                                  128,
-                                 65536
+                                 65535
                              );
         if (!g_tcp_context_pool) {
             LOGERR("[run_event_loop] failed to create tcp context memory pool");
