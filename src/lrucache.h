@@ -5,6 +5,7 @@
 #define HASH_FUNCTION(key,len,hashv) { (hashv) = XXH32(key, len, 0); }
 #include "uthash.h"
 #include "netutils.h"
+#include "udp_proxy.h"
 
 #include "../libev/ev.h"
 
@@ -25,9 +26,11 @@ typedef struct {
     bool       dest_is_ipv4; // Protocol family flag for orig_dstaddr
     bool       is_forked;    // Is this session in the Fork Table?
     bool       is_fakedns;   // Is this a FakeDNS session?
-    evio_t     tcp_watcher;  // .data: len(16bit) | recvbuff
-    evio_t     udp_watcher;  // .data: len(16bit) | firstmsg
+    evio_t     tcp_watcher;  // .data -> handshake_buf during handshake, NULL after
+    evio_t     udp_watcher;  // .data: &pending_queue (handshake) | NULL (forwarding)
     evtimer_t  idle_timer;
+    uint8_t    handshake_buf[32]; // Embedded SOCKS5 response buffer (layout: uint16_t nsend/nrecv + response data)
+    udp_packet_queue_t pending_queue; // Embedded packet queue for buffering during handshake
     myhash_hh  hh;
 } udp_socks5ctx_t;
 

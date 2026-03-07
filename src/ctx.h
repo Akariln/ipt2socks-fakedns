@@ -62,6 +62,7 @@ extern __thread udp_tproxyctx_t *g_udp_tproxyctx_table;
 extern __thread char    g_udp_batch_buffer[UDP_BATCH_SIZE][UDP_DATAGRAM_MAXSIZ];
 extern __thread memory_pool_t *g_udp_packet_pool;
 extern __thread memory_pool_t *g_udp_context_pool;
+extern __thread memory_pool_t *g_udp_tproxy_pool;
 extern __thread memory_pool_t *g_tcp_context_pool;
 extern __thread void          *g_tcp_session_head;
 

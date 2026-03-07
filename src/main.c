@@ -598,26 +598,27 @@ static void* run_event_loop(void *arg) {
     int     fakedns_sockfd = -1;
 
     /* Initialize memory pools (thread-local) */
-    /* Context pool serves: Main table + Fork table + TProxy table */
-    size_t cache_size = lrucache_get_main_maxsize()
-                        + lrucache_get_fork_maxsize()
-                        + lrucache_get_tproxy_maxsize();
-    size_t initial_blocks = cache_size;
+    /* Context pool serves: Main table + Fork table (socks5ctx only) */
+    size_t context_initial_blocks = lrucache_get_main_maxsize() + lrucache_get_fork_maxsize();
+    if (context_initial_blocks < MEMPOOL_INITIAL_SIZE) {
+        context_initial_blocks = MEMPOOL_INITIAL_SIZE;
+    }
 
-    if (initial_blocks < MEMPOOL_INITIAL_SIZE) {
-        initial_blocks = MEMPOOL_INITIAL_SIZE;
+    size_t tproxy_initial_blocks = lrucache_get_tproxy_maxsize();
+    if (tproxy_initial_blocks < MEMPOOL_INITIAL_SIZE) {
+        tproxy_initial_blocks = MEMPOOL_INITIAL_SIZE;
     }
 
     /* Determine if this thread should handle UDP */
     int my_thread_index = is_main_thread ? 0 : thread_info->thread_index;
     bool should_handle_udp = (my_thread_index < g_udp_nthreads) && (g_options & OPT_ENABLE_UDP);
 
-    /* 1. Packet Pool (variable-sized, high limit for throughput) */
+    /* 1. Packet Pool (variable-sized, fixed initial, high limit for throughput) */
     if (should_handle_udp) {
         g_udp_packet_pool = mempool_create(
                                 MEMPOOL_BLOCK_SIZE,
-                                initial_blocks,
-                                65536
+                                128,
+                                16384
                             );
         if (!g_udp_packet_pool) {
             LOGERR("[run_event_loop] failed to create packet memory pool");
@@ -625,16 +626,26 @@ static void* run_event_loop(void *arg) {
             goto cleanup;
         }
 
-        /* 2. UDP Context Pool: serves udp_socks5ctx_t (264 bytes) and udp_tproxyctx_t (120 bytes)
-         * Block size = max(sizeof(udp_socks5ctx_t), sizeof(udp_tproxyctx_t))
-         * Note: udp_tproxyctx_t wastes ~54% per allocation, acceptable for reduced fragmentation */
+        /* 2. UDP Context Pool: serves udp_socks5ctx_t (320 bytes) only */
         g_udp_context_pool = mempool_create(
-                                 sizeof(udp_socks5ctx_t),  /* 264 bytes (larger of the two) */
-                                 initial_blocks,
-                                 initial_blocks * 2
+                                 sizeof(udp_socks5ctx_t),
+                                 context_initial_blocks,
+                                 context_initial_blocks * 2
                              );
         if (!g_udp_context_pool) {
             LOGERR("[run_event_loop] failed to create context memory pool");
+            exit_code = 1;
+            goto cleanup;
+        }
+
+        /* 3. UDP TProxy Pool: serves udp_tproxyctx_t (120 bytes) only */
+        g_udp_tproxy_pool = mempool_create(
+                                sizeof(udp_tproxyctx_t),
+                                tproxy_initial_blocks,
+                                tproxy_initial_blocks * 2
+                            );
+        if (!g_udp_tproxy_pool) {
+            LOGERR("[run_event_loop] failed to create tproxy memory pool");
             exit_code = 1;
             goto cleanup;
         }
@@ -645,7 +656,7 @@ static void* run_event_loop(void *arg) {
         g_tcp_context_pool = mempool_create(
                                  sizeof(tcp_context_t),
                                  128,
-                                 0
+                                 65536
                              );
         if (!g_tcp_context_pool) {
             LOGERR("[run_event_loop] failed to create tcp context memory pool");
@@ -768,6 +779,13 @@ cleanup:
             LOGERR("[run_event_loop] udp context pool leaks: %zu", leaks);
         }
         g_udp_context_pool = NULL;
+    }
+    if (g_udp_tproxy_pool) {
+        size_t leaks = mempool_destroy(g_udp_tproxy_pool);
+        if (leaks > 0) {
+            LOGERR("[run_event_loop] udp tproxy pool leaks: %zu", leaks);
+        }
+        g_udp_tproxy_pool = NULL;
     }
     if (g_tcp_context_pool) {
         size_t leaks = mempool_destroy(g_tcp_context_pool);

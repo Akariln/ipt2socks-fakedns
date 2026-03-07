@@ -149,13 +149,13 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
     } else if (msg->msg_namelen == sizeof(skaddr6_t)) {
         memcpy(&skaddr, msg->msg_name, sizeof(skaddr6_t));
     } else {
-        LOGERR("[udp_tproxy_recvmsg_cb] invalid msg_namelen: %d", (int)msg->msg_namelen);
+        LOGERR("[handle_udp_socket_msg] invalid msg_namelen: %d", (int)msg->msg_namelen);
         return;
     }
 
     IF_VERBOSE {
         parse_socket_addr(&skaddr, ipstr, &portno);
-        LOGINF("[udp_tproxy_recvmsg_cb] recv from %s#%hu, nrecv:%zd", ipstr, portno, nrecv);
+        LOGINF("[handle_udp_socket_msg] recv from %s#%hu, nrecv:%zd", ipstr, portno, nrecv);
     }
 
     ip_port_t key_ipport;
@@ -169,7 +169,7 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
     }
 
     if (!get_udp_orig_dstaddr(isipv4 ? AF_INET : AF_INET6, msg, &skaddr)) {
-        LOGERR("[udp_tproxy_recvmsg_cb] destination address not found in udp msg");
+        LOGERR("[handle_udp_socket_msg] destination address not found in udp msg");
         return;
     }
 
@@ -182,13 +182,13 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
             if (fakedns_reverse_lookup(target_ip, domain_buf, sizeof(domain_buf))) {
                 fake_domain = domain_buf;
                 IF_VERBOSE {
-                    LOGINF("[udp_tproxy_recvmsg_cb] fakedns hit: %u.%u.%u.%u -> %s",
+                    LOGINF("[handle_udp_socket_msg] fakedns hit: %u.%u.%u.%u -> %s",
                            ((uint8_t *)&target_ip)[0], ((uint8_t *)&target_ip)[1],
                            ((uint8_t *)&target_ip)[2], ((uint8_t *)&target_ip)[3],
                            fake_domain);
                 }
             } else {
-                LOGERR("[udp_tproxy_recvmsg_cb] fakedns miss for FakeIP: %u.%u.%u.%u, dropping packet",
+                LOGERR("[handle_udp_socket_msg] fakedns miss for FakeIP: %u.%u.%u.%u, dropping packet",
                        ((uint8_t *)&target_ip)[0], ((uint8_t *)&target_ip)[1],
                        ((uint8_t *)&target_ip)[2], ((uint8_t *)&target_ip)[3]);
                 return;
@@ -202,7 +202,7 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
 
     header_start = build_socks5_udp_header(payload_start, fake_domain, &skaddr, isipv4, &actual_headerlen);
     if (!header_start) {
-        LOGERR("[udp_tproxy_recvmsg_cb] failed to build SOCKS5 UDP header");
+        LOGERR("[handle_udp_socket_msg] failed to build SOCKS5 UDP header");
         return;
     }
 
@@ -238,11 +238,11 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
             /* Not found, new session needed. Force fork to ensure it goes to Fork Table on creation */
             force_fork = true;
             IF_VERBOSE {
-                LOGINF("[udp_tproxy_recvmsg_cb] new FakeDNS session (will fork): %s -> %s", ipstr, fake_domain);
+                LOGINF("[handle_udp_socket_msg] new FakeDNS session (will fork): %s -> %s", ipstr, fake_domain);
             }
         } else {
             IF_VERBOSE {
-                LOGINF("[udp_tproxy_recvmsg_cb] reuse fork context (FakeDNS): %s -> %s", ipstr, fake_domain);
+                LOGINF("[handle_udp_socket_msg] reuse fork context (FakeDNS): %s -> %s", ipstr, fake_domain);
             }
         }
     } else {
@@ -269,7 +269,7 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
                     char target_ipstr[IP6STRLEN];
                     portno_t target_port;
                     parse_socket_addr(&skaddr, target_ipstr, &target_port);
-                    LOGINF("[udp_tproxy_recvmsg_cb] reuse main context (RealIP): %s -> %s#%d", ipstr, target_ipstr, target_port);
+                    LOGINF("[handle_udp_socket_msg] reuse main context (RealIP): %s -> %s#%d", ipstr, target_ipstr, target_port);
                 }
             }
         }
@@ -281,7 +281,7 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
             context = udp_socks5ctx_fork_get(&g_udp_fork_table, &fork_key);
             if (context) {
                 IF_VERBOSE {
-                    LOGINF("[udp_tproxy_recvmsg_cb] reuse fork context (RealIP): %s -> RealIP", ipstr);
+                    LOGINF("[handle_udp_socket_msg] reuse fork context (RealIP): %s -> RealIP", ipstr);
                 }
             }
             /* If still NULL, creation logic below will use force_fork to decide which table */
@@ -295,19 +295,19 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
         ssize_t tfo_nsend = -1; /* if tfo connect succeed: tfo_nsend >= 0 */
 
         if (!tcp_connect(tcp_sockfd, &g_server_skaddr, tfo_data, tfo_datalen, &tfo_nsend)) {
-            LOGERR("[udp_tproxy_recvmsg_cb] connect to %s#%hu: %s", g_server_ipstr, g_server_portno, strerror(errno));
+            LOGERR("[handle_udp_socket_msg] connect to %s#%hu: %s", g_server_ipstr, g_server_portno, strerror(errno));
             close(tcp_sockfd);
             return;
         }
         if (tfo_nsend >= 0) {
-            LOGINF("[udp_tproxy_recvmsg_cb] tfo send to %s#%hu, nsend:%zd", g_server_ipstr, g_server_portno, tfo_nsend);
+            LOGINF("[handle_udp_socket_msg] tfo send to %s#%hu, nsend:%zd", g_server_ipstr, g_server_portno, tfo_nsend);
         } else {
-            LOGINF("[udp_tproxy_recvmsg_cb] try to connect to %s#%hu ...", g_server_ipstr, g_server_portno);
+            LOGINF("[handle_udp_socket_msg] try to connect to %s#%hu ...", g_server_ipstr, g_server_portno);
         }
 
         context = mempool_calloc_sized(g_udp_context_pool, sizeof(*context));
         if (!context) {
-            LOGERR("[udp_tproxy_recvmsg_cb] mempool alloc failed for context");
+            LOGERR("[handle_udp_socket_msg] mempool alloc failed for context");
             close(tcp_sockfd);
             return;
         }
@@ -333,24 +333,16 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
             tfo_nsend = tfo_nsend >= 0 ? tfo_nsend : 0;
         }
         ev_io_start(evloop, watcher);
-        context->tcp_watcher.data = malloc(SOCKS5_RESPONSE_MAX_SIZE);
-        if (!context->tcp_watcher.data) {
-            LOGERR("[udp_tproxy_recvmsg_cb] malloc failed for SOCKS5 response buffer");
-            ev_io_stop(evloop, watcher);
-            close(tcp_sockfd);
-            mempool_free_sized(g_udp_context_pool, context, sizeof(*context));
-            return;
-        }
+        context->tcp_watcher.data = context->handshake_buf;
         *(uint16_t *)context->tcp_watcher.data = tfo_nsend; /* nsend or nrecv */
 
         /* tunnel not ready if udp_watcher->data != NULL */
         size_t node_size = sizeof(udp_packet_node_t) + actual_headerlen + nrecv;
         udp_packet_node_t *node = mempool_alloc_sized(g_udp_packet_pool, node_size);
         if (!node) {
-            LOGERR("[udp_tproxy_recvmsg_cb] mempool_alloc_sized failed for %zu bytes", node_size);
+            LOGERR("[handle_udp_socket_msg] mempool_alloc_sized failed for %zu bytes", node_size);
             ev_io_stop(evloop, watcher);
             close(tcp_sockfd);
-            free(context->tcp_watcher.data);
             mempool_free_sized(g_udp_context_pool, context, sizeof(*context));
             return;
         }
@@ -358,20 +350,10 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
         node->len = actual_headerlen + nrecv;
         memcpy(node->data, header_start, actual_headerlen + nrecv);
 
-        udp_packet_queue_t *queue = malloc(sizeof(udp_packet_queue_t));
-        if (!queue) {
-            LOGERR("[udp_tproxy_recvmsg_cb] malloc failed for packet queue");
-            mempool_free_sized(g_udp_packet_pool, node, node_size);
-            ev_io_stop(evloop, watcher);
-            close(tcp_sockfd);
-            free(context->tcp_watcher.data);
-            mempool_free_sized(g_udp_context_pool, context, sizeof(*context));
-            return;
-        }
-        queue->head = node;
-        queue->tail = node;
-        queue->count = 1;
-        context->udp_watcher.data = queue;
+        context->pending_queue.head = node;
+        context->pending_queue.tail = node;
+        context->pending_queue.count = 1;
+        context->udp_watcher.data = &context->pending_queue;
 
         evtimer_t *timer = &context->idle_timer;
         ev_timer_init(timer, udp_socks5_context_timeout_cb, 0, g_udp_idletimeout_sec);
@@ -398,14 +380,14 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
             del_context = udp_socks5ctx_fork_add(&g_udp_fork_table, context);
             IF_VERBOSE {
                 if (fake_domain) {
-                    LOGINF("[udp_tproxy_recvmsg_cb] new fork context created (FakeDNS): %s -> %s", ipstr, fake_domain);
+                    LOGINF("[handle_udp_socket_msg] new fork context created (FakeDNS): %s -> %s", ipstr, fake_domain);
                 } else {
-                    LOGINF("[udp_tproxy_recvmsg_cb] new fork context created (RealIP Collision)");
+                    LOGINF("[handle_udp_socket_msg] new fork context created (RealIP Collision)");
                 }
             }
         } else {
             IF_VERBOSE {
-                LOGINF("[udp_tproxy_recvmsg_cb] new main context created (RealIP)");
+                LOGINF("[handle_udp_socket_msg] new main context created (RealIP)");
             }
 
             context->is_forked = false;
@@ -424,16 +406,16 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
         udp_packet_queue_t *queue = context->udp_watcher.data;
 
         if (queue->count >= UDP_QUEUE_MAX_DEPTH) {
-            LOGWAR("[udp_tproxy_recvmsg_cb] packet queue full (%zu), dropping this msg", queue->count);
+            LOGWAR("[handle_udp_socket_msg] packet queue full (%zu), dropping this msg", queue->count);
             return;
         }
 
-        LOGINF("[udp_tproxy_recvmsg_cb] tunnel is not ready, buffering this msg (queue: %zu)", queue->count);
+        LOGINF("[handle_udp_socket_msg] tunnel is not ready, buffering this msg (queue: %zu)", queue->count);
 
         size_t node_size = sizeof(udp_packet_node_t) + actual_headerlen + nrecv;
         udp_packet_node_t *node = mempool_alloc_sized(g_udp_packet_pool, node_size);
         if (!node) {
-            LOGERR("[udp_tproxy_recvmsg_cb] mempool_alloc_sized failed for %zu bytes", node_size);
+            LOGERR("[handle_udp_socket_msg] mempool_alloc_sized failed for %zu bytes", node_size);
             return;
         }
         node->next = NULL;
@@ -457,16 +439,16 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
     nrecv = send(context->udp_watcher.fd, header_start, actual_headerlen + nrecv, 0);
     if (nrecv < 0) {
         parse_socket_addr(&skaddr, ipstr, &portno);
-        LOGERR("[udp_tproxy_recvmsg_cb] send to %s#%hu: %s", ipstr, portno, strerror(errno));
+        LOGERR("[handle_udp_socket_msg] send to %s#%hu: %s", ipstr, portno, strerror(errno));
         return;
     }
     IF_VERBOSE {
         if (fake_domain) {
             portno = ntohs(((skaddr4_t *)&skaddr)->sin_port);
-            LOGINF("[udp_tproxy_recvmsg_cb] send to %s#%hu, nsend:%zd", fake_domain, portno, nrecv);
+            LOGINF("[handle_udp_socket_msg] send to %s#%hu, nsend:%zd", fake_domain, portno, nrecv);
         } else {
             parse_socket_addr(&skaddr, ipstr, &portno);
-            LOGINF("[udp_tproxy_recvmsg_cb] send to %s#%hu, nsend:%zd", ipstr, portno, nrecv);
+            LOGINF("[handle_udp_socket_msg] send to %s#%hu, nsend:%zd", ipstr, portno, nrecv);
         }
     }
 }
@@ -736,11 +718,9 @@ static void udp_socks5_recv_proxyresp_cb(evloop_t *evloop, evio_t *tcp_watcher, 
         curr = next;
     }
 
-    free(context->udp_watcher.data);
     context->udp_watcher.data = NULL;
 
     ev_set_cb(tcp_watcher, udp_socks5_recv_tcpmessage_cb);
-    free(tcp_watcher->data);
     tcp_watcher->data = NULL;
 
     evio_t *watcher = &context->udp_watcher;
@@ -882,7 +862,7 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, evio_t *udp_watcher,
                 close(tproxy_sockfd);
                 continue;
             }
-            tproxyctx = mempool_calloc_sized(g_udp_context_pool, sizeof(*tproxyctx));
+            tproxyctx = mempool_calloc_sized(g_udp_tproxy_pool, sizeof(*tproxyctx));
             if (!tproxyctx) {
                 LOGERR("[udp_socks5_recv_udpmessage_cb] mempool alloc failed for tproxyctx");
                 close(tproxy_sockfd);
@@ -1041,7 +1021,6 @@ static void udp_socks5_context_timeout_cb(evloop_t *evloop, evtimer_t *idle_time
 
     ev_io_stop(evloop, &context->tcp_watcher);
     close(context->tcp_watcher.fd);
-    free(context->tcp_watcher.data);
 
     if (context->udp_watcher.data) {
         udp_packet_queue_t *queue = context->udp_watcher.data;
@@ -1052,7 +1031,6 @@ static void udp_socks5_context_timeout_cb(evloop_t *evloop, evtimer_t *idle_time
             mempool_free_sized(g_udp_packet_pool, curr, node_size);
             curr = next;
         }
-        free(queue);
         context->udp_watcher.data = NULL;
     } else {
         ev_io_stop(evloop, &context->udp_watcher);
@@ -1070,7 +1048,7 @@ static void udp_tproxy_context_timeout_cb(evloop_t *evloop, evtimer_t *idle_time
 
     ev_timer_stop(evloop, idle_timer);
     close(context->udp_sockfd);
-    mempool_free_sized(g_udp_context_pool, context, sizeof(*context));
+    mempool_free_sized(g_udp_tproxy_pool, context, sizeof(*context));
 }
 
 void udp_proxy_close_all_sessions(evloop_t *evloop) {
