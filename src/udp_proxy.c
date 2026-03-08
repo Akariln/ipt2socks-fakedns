@@ -376,7 +376,6 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
 
         if (force_fork) {
             context->is_forked = true;
-            context->is_fakedns = (fake_domain != NULL); // Ensure this flag is set accurately
             del_context = udp_socks5ctx_fork_add(&g_udp_fork_table, context);
             IF_VERBOSE {
                 if (fake_domain) {
@@ -670,6 +669,11 @@ static void udp_socks5_recv_proxyresp_cb(evloop_t *evloop, evio_t *tcp_watcher, 
 
     /* connect to the socks5 udp relay endpoint */
     int udp_sockfd = new_udp_normal_sockfd(relay_addr.sin6_family);
+    if (udp_sockfd < 0) {
+        LOGERR("[udp_socks5_recv_proxyresp_cb] new_udp_normal_sockfd failed");
+        udp_socks5ctx_release(evloop, context);
+        return;
+    }
     if (connect(udp_sockfd, (void *)&relay_addr, relay_isipv4 ? sizeof(skaddr4_t) : sizeof(skaddr6_t)) < 0) {
         char ipstr[IP6STRLEN];
         portno_t portno;
@@ -817,6 +821,7 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, evio_t *udp_watcher,
                 continue;
             }
         } else {
+            LOGERR("[udp_socks5_recv_udpmessage_cb] unsupported address type: 0x%02x", udp4msg->addrtype);
             continue;
         }
 
@@ -859,6 +864,10 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, evio_t *udp_watcher,
             }
             int tproxy_sockfd = new_udp_tpsend_sockfd(dest_isipv4 ? AF_INET : AF_INET6);
             if (bind(tproxy_sockfd, (void *)&fromskaddr, dest_isipv4 ? sizeof(skaddr4_t) : sizeof(skaddr6_t)) < 0) {
+                char ipstr[IP6STRLEN];
+                portno_t portno;
+                parse_socket_addr(&fromskaddr, ipstr, &portno);
+                LOGERR("[udp_socks5_recv_udpmessage_cb] bind tproxy_sockfd to %s#%hu: %s", ipstr, portno, strerror(errno));
                 close(tproxy_sockfd);
                 continue;
             }
