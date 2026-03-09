@@ -12,9 +12,10 @@ LDFLAGS = -pthread -O3 -flto=auto -Wl,--gc-sections -s $(EXTRA_LDFLAGS)
 
 LDLIBS = -lm
 
-SRCS = src/main.c src/ctx.c src/lrucache.c src/netutils.c src/socks5.c \
+SRCS = src/main.c src/ctx.c src/netutils.c src/socks5.c \
        libev/ev.c src/fakedns.c src/fakedns_server.c src/xxhash.c \
-       src/logutils.c src/mempool.c src/udp_proxy.c src/tcp_proxy.c
+       src/logutils.c src/mempool.c src/udp_proxy.c src/tcp_proxy.c \
+       src/udp_lrucache.c
 
 OBJS = $(SRCS:.c=.o)
 DEPS = $(SRCS:.c=.d)
@@ -52,7 +53,7 @@ debug:
 	$(MAKE) clean
 	$(MAKE) CFLAGS="-std=c99 -Wall -Wextra -Wvla -pthread -O0 -g \
 		-fno-strict-aliasing -MMD -MP -DENABLE_SENDTO_LOG -DFAKEDNS_MRU_STATS \
-		-fsanitize=address,undefined $(EXTRA_CFLAGS)" \
+		-D_GNU_SOURCE -fsanitize=address,undefined $(EXTRA_CFLAGS)" \
 		LDFLAGS="-pthread -g -fsanitize=address,undefined $(EXTRA_LDFLAGS)" \
 		all
 
