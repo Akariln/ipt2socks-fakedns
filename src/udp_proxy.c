@@ -1,11 +1,8 @@
 #include "udp_proxy.h"
 #include "ctx.h"
-#include "netutils.h"
 #include "socks5.h"
 #include "fakedns.h"
 #include "logutils.h"
-#include "lrucache.h"
-#include "mempool.h"
 
 #include <stdlib.h>
 #include <unistd.h>
@@ -28,8 +25,8 @@ static void udp_socks5_send_proxyreq_cb(evloop_t *evloop, evio_t *watcher, int r
 static void udp_socks5_recv_proxyresp_cb(evloop_t *evloop, evio_t *watcher, int revents);
 static void udp_socks5_recv_tcpmessage_cb(evloop_t *evloop, evio_t *watcher, int revents);
 static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, evio_t *watcher, int revents);
-static void udp_socks5_context_timeout_cb(evloop_t *evloop, evtimer_t *watcher, int revents);
-static void udp_tproxy_context_timeout_cb(evloop_t *evloop, evtimer_t *watcher, int revents);
+static void udp_socks5_context_timeout_cb(evloop_t *evloop, evtimer_t *idle_timer, int revents);
+static void udp_tproxy_context_timeout_cb(evloop_t *evloop, evtimer_t *idle_timer, int revents);
 
 
 void udp_tproxy_recvmsg_cb(evloop_t *evloop, evio_t *tprecv_watcher, int revents __attribute__((unused))) {
@@ -256,11 +253,9 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
              * 1. Protocol family mismatch (IPv4 vs IPv6)
              * 2. Type mismatch (FakeDNS session occupying main slot)
              */
-            if (main_ctx->dest_is_ipv4 != isipv4) {
-                /* Protocol mismatch (e.g. client used same port for IPv4 and IPv6 dest) */
-                force_fork = true;
-            } else if (main_ctx->is_fakedns) {
-                /* Should not happen if separation is strict, but handle safely */
+            if ((main_ctx->dest_is_ipv4 != isipv4) || main_ctx->is_fakedns) {
+                /* Protocol mismatch (e.g. client used same port for IPv4 and IPv6 dest)
+                 * OR Type mismatch (FakeDNS session occupying main slot) */
                 force_fork = true;
             } else {
                 /* Match! Reuse Main Context (Full Cone NAT) */
@@ -628,7 +623,7 @@ static void udp_socks5_recv_proxyresp_cb(evloop_t *evloop, evio_t *tcp_watcher, 
 
         if (total_len > 5) {
             /* Update length targets */
-            context->idle_timer.data = (void *)total_len;
+            context->idle_timer.data = (void *)(uintptr_t)total_len;
             *(uint16_t *)tcp_watcher->data = 5; /* We already have 5 bytes */
 
             /* Attempt to read the rest immediately */
@@ -733,9 +728,9 @@ static void udp_socks5_recv_proxyresp_cb(evloop_t *evloop, evio_t *tcp_watcher, 
 
     ev_timer_again(evloop, &context->idle_timer);
     if (context->is_forked) {
-        udp_socks5ctx_use(&g_udp_fork_table, context, &context->fork_key, sizeof(context->fork_key));
+        udp_socks5ctx_touch_fork(&g_udp_fork_table, context);
     } else {
-        udp_socks5ctx_use(&g_udp_socks5ctx_table, context, &context->key_ipport, sizeof(context->key_ipport));
+        udp_socks5ctx_touch_main(&g_udp_socks5ctx_table, context);
     }
 }
 
@@ -1008,9 +1003,9 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, evio_t *udp_watcher,
     /* Optimization: Update LRU only once per batch */
     if (retval > 0) {
         if (socks5ctx->is_forked) {
-            udp_socks5ctx_use(&g_udp_fork_table, socks5ctx, &socks5ctx->fork_key, sizeof(socks5ctx->fork_key));
+            udp_socks5ctx_touch_fork(&g_udp_fork_table, socks5ctx);
         } else {
-            udp_socks5ctx_use(&g_udp_socks5ctx_table, socks5ctx, &socks5ctx->key_ipport, sizeof(socks5ctx->key_ipport));
+            udp_socks5ctx_touch_main(&g_udp_socks5ctx_table, socks5ctx);
         }
         ev_timer_again(evloop, &socks5ctx->idle_timer);
     }
@@ -1060,26 +1055,23 @@ static void udp_tproxy_context_timeout_cb(evloop_t *evloop, evtimer_t *idle_time
     mempool_free_sized(g_udp_tproxy_pool, context, sizeof(*context));
 }
 
-void udp_proxy_close_all_sessions(evloop_t *evloop) {
-    udp_socks5ctx_t *ctx;
-    udp_socks5ctx_t *tmp;
-    udp_tproxyctx_t *tctx;
-    udp_tproxyctx_t *ttmp;
+static void wrapper_socks5_timeout_cb(void *evloop_ctx, udp_socks5ctx_t *entry) {
+    udp_socks5_context_timeout_cb((evloop_t *)evloop_ctx, &entry->idle_timer, EV_CUSTOM);
+}
 
+static void wrapper_tproxy_timeout_cb(void *evloop_ctx, udp_tproxyctx_t *entry) {
+    udp_tproxy_context_timeout_cb((evloop_t *)evloop_ctx, &entry->idle_timer, EV_CUSTOM);
+}
+
+void udp_proxy_close_all_sessions(evloop_t *evloop) {
     LOGINF("[udp_proxy_close_all_sessions] cleaning up remaining sessions...");
 
     /* Clean UDP SOCKS5 Main Table */
-    HASH_ITER(hh, g_udp_socks5ctx_table, ctx, tmp) {
-        udp_socks5_context_timeout_cb(evloop, &ctx->idle_timer, EV_CUSTOM);
-    }
+    udp_socks5ctx_clear_main(&g_udp_socks5ctx_table, wrapper_socks5_timeout_cb, evloop);
 
     /* Clean UDP SOCKS5 Fork Table */
-    HASH_ITER(hh, g_udp_fork_table, ctx, tmp) {
-        udp_socks5_context_timeout_cb(evloop, &ctx->idle_timer, EV_CUSTOM);
-    }
+    udp_socks5ctx_clear_fork(&g_udp_fork_table, wrapper_socks5_timeout_cb, evloop);
 
     /* Clean UDP TProxy Table */
-    HASH_ITER(hh, g_udp_tproxyctx_table, tctx, ttmp) {
-        udp_tproxy_context_timeout_cb(evloop, &tctx->idle_timer, EV_CUSTOM);
-    }
+    udp_tproxyctx_clear(&g_udp_tproxyctx_table, wrapper_tproxy_timeout_cb, evloop);
 }

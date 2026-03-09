@@ -3,13 +3,8 @@
 #include "fakedns_server.h"
 #include "logutils.h"
 #include "lrucache.h"
-#include "mempool.h"
-#include "netutils.h"
 #include "socks5.h"
 #include "tcp_proxy.h"
-#include "udp_proxy.h"
-
-#include "../libev/ev.h"
 
 #include <errno.h>
 #include <limits.h>
@@ -27,7 +22,7 @@
 
 #define IPT2SOCKS_VERSION "ipt2socks original <https://github.com/zfl9/ipt2socks>\nipt2socks-fakedns v2.0.6 <https://github.com/wyzhou-com/ipt2socks-fakedns>"
 
-static void* run_event_loop(void *is_main_thread);
+static void* run_event_loop(void *arg);
 static void on_async_exit(evloop_t *loop, ev_async *watcher __attribute__((unused)), int revents __attribute__((unused)));
 
 static void print_command_help(void) {
@@ -227,7 +222,7 @@ static void parse_command_args(int argc, char* argv[]) {
                     if (!validate_uint_range(optarg, 65535, &val, "maxsize of udp lrucache")) {
                         goto PRINT_HELP_AND_EXIT;
                     }
-                    lrucache_set_maxsize((uint16_t)val);
+                    udp_lrucache_set_maxsize((uint16_t)val);
                     break;
                 }
             case 'o': {
@@ -403,7 +398,7 @@ int main(int argc, char* argv[]) {
     }
     if (g_options & OPT_ENABLE_UDP) {
         LOG_ALWAYS_INF("[main] udp cache capacity: main=%hu fork=%hu tproxy=%hu",
-                       lrucache_get_main_maxsize(), lrucache_get_fork_maxsize(), lrucache_get_tproxy_maxsize());
+                       udp_lrucache_get_main_maxsize(), udp_lrucache_get_fork_maxsize(), udp_lrucache_get_tproxy_maxsize());
         LOG_ALWAYS_INF("[main] udp session idle timeout: %hu", g_udp_idletimeout_sec);
     }
     LOG_ALWAYS_INF("[main] number of worker threads: %hhu", g_nthreads);
@@ -599,13 +594,13 @@ static void* run_event_loop(void *arg) {
 
     /* Initialize memory pools (thread-local) */
     /* Context pool serves: Main table + Fork table (socks5ctx only) */
-    size_t context_max_blocks = lrucache_get_main_maxsize() + lrucache_get_fork_maxsize();
+    size_t context_max_blocks = udp_lrucache_get_main_maxsize() + udp_lrucache_get_fork_maxsize();
     size_t context_initial_blocks = MEMPOOL_INITIAL_SIZE;
     if (context_initial_blocks > context_max_blocks) {
         context_initial_blocks = context_max_blocks;
     }
 
-    size_t tproxy_max_blocks = lrucache_get_tproxy_maxsize();
+    size_t tproxy_max_blocks = udp_lrucache_get_tproxy_maxsize();
     size_t tproxy_initial_blocks = MEMPOOL_INITIAL_SIZE;
     if (tproxy_initial_blocks > tproxy_max_blocks) {
         tproxy_initial_blocks = tproxy_max_blocks;
@@ -748,11 +743,9 @@ cleanup:
     cleanup_endpoint(evloop, &fakedns_watcher, &fakedns_sockfd);
     if (signal_watcher_started) {
         ev_io_stop(evloop, &signal_watcher);
-        signal_watcher_started = false;
     }
     if (signalfd_fd >= 0) {
         close(signalfd_fd);
-        signalfd_fd = -1;
     }
     /* Stop exit_watcher for worker threads before destroying the event loop */
     if (!is_main_thread) {
