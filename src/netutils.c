@@ -1,15 +1,17 @@
 #include "netutils.h"
-#include "logutils.h"
+
+#include <arpa/inet.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <grp.h>
+#include <netinet/tcp.h>
+#include <pwd.h>
 #include <stdlib.h>
 #include <string.h>
-#include <errno.h>
-#include <unistd.h>
-#include <fcntl.h>
-#include <arpa/inet.h>
-#include <netinet/tcp.h>
 #include <sys/resource.h>
-#include <pwd.h>
-#include <grp.h>
+#include <unistd.h>
+
+#include "logutils.h"
 
 #ifndef PATH_MAX
 #define PATH_MAX 4096

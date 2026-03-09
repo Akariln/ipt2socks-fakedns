@@ -1,19 +1,20 @@
 #include "tcp_proxy.h"
-#include "ctx.h"
-#include "netutils.h"
-#include "socks5.h"
-#include "fakedns.h"
-#include "logutils.h"
 
-#include <stdlib.h>
-#include <unistd.h>
 #include <errno.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/syscall.h>
+#include <unistd.h>
+
+#include "ctx.h"
+#include "fakedns.h"
+#include "logutils.h"
+#include "socks5.h"
 
 /* splice() api */
 #ifndef SPLICE_F_MOVE
-#include <sys/syscall.h>
+// #include <sys/syscall.h> // Moved to top-level includes
 
 #undef  SPLICE_F_MOVE
 #define SPLICE_F_MOVE 1

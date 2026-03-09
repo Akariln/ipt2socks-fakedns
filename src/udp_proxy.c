@@ -1,18 +1,16 @@
 #include "udp_proxy.h"
+
+#include <arpa/inet.h>
+#include <errno.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
 #include "ctx.h"
-#include "socks5.h"
 #include "fakedns.h"
 #include "logutils.h"
-
-#include <stdlib.h>
-#include <unistd.h>
-#include <errno.h>
-#include <string.h>
-#include <arpa/inet.h>
-
-#define SOCKS5_RESPONSE_MAX_SIZE 32
-
-#include <sys/socket.h>
+#include "socks5.h"
 
 /* Forward declarations */
 static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, struct msghdr *msg, ssize_t nrecv, char *buffer);

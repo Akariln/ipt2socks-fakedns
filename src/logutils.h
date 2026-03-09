@@ -1,8 +1,6 @@
 #ifndef IPT2SOCKS_LOGUTILS_H
 #define IPT2SOCKS_LOGUTILS_H
 
-#include <stdio.h>
-#include <time.h>
 #include <stdbool.h>
 
 extern bool g_verbose;

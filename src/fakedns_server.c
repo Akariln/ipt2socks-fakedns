@@ -1,10 +1,11 @@
 #include "fakedns_server.h"
-#include "fakedns.h"
-#include "logutils.h"
 
 #include <errno.h>
 #include <string.h>
 #include <sys/socket.h>
+
+#include "fakedns.h"
+#include "logutils.h"
 
 #define FAKEDNS_BATCH_SIZE 16
 #define FAKEDNS_MAX_UDP_SIZE 512

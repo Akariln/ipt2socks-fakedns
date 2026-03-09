@@ -1,8 +1,10 @@
 #include "mempool.h"
-#include "logutils.h"
+
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdint.h>
+
+#include "logutils.h"
 
 /* ============================================================================
  * Memory Pool Implementation with Doubly Linked List Tracking

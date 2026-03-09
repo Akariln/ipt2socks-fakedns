@@ -1,17 +1,19 @@
 #include "fakedns.h"
-#include "xxhash.h"
-#include "logutils.h"
 
+#include <arpa/inet.h>
+#include <errno.h>
 #include <pthread.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
-#include <arpa/inet.h>
-#include <errno.h>
-#include <unistd.h>
 #include <time.h>
-#include <stddef.h>
+#include <unistd.h>
+
+#include "xxhash.h"
+
+#include "logutils.h"
 
 typedef struct {
     uint32_t ip; /* Network Byte Order */

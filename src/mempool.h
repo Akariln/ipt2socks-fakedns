@@ -2,7 +2,6 @@
 #define IPT2SOCKS_MEMPOOL_H
 
 #include <stddef.h>
-#include <stdbool.h>
 
 /* Memory pool for UDP packet nodes */
 

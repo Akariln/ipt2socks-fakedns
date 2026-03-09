@@ -1,14 +1,6 @@
-#include "ctx.h"
-#include "fakedns.h"
-#include "fakedns_server.h"
-#include "logutils.h"
-#include "lrucache.h"
-#include "socks5.h"
-#include "tcp_proxy.h"
-
 #include <errno.h>
-#include <limits.h>
 #include <getopt.h>
+#include <limits.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdbool.h>
@@ -19,6 +11,14 @@
 #include <sys/signalfd.h>
 #include <sys/socket.h>
 #include <unistd.h>
+
+#include "ctx.h"
+#include "fakedns.h"
+#include "fakedns_server.h"
+#include "logutils.h"
+#include "lrucache.h"
+#include "socks5.h"
+#include "tcp_proxy.h"
 
 #define IPT2SOCKS_VERSION "ipt2socks original <https://github.com/zfl9/ipt2socks>\nipt2socks-fakedns v2.0.6 <https://github.com/wyzhou-com/ipt2socks-fakedns>"
 

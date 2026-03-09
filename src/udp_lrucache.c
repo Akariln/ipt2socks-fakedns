@@ -1,5 +1,5 @@
-#include "udp_proxy.h"   /* udp_socks5ctx_t, udp_tproxyctx_t, ip_port_t, … */
 #include "lrucache.h"    /* LRU_DEFINE_*                                   */
+#include "udp_proxy.h"   /* udp_socks5ctx_t, udp_tproxyctx_t, ip_port_t, … */
 
 /* ── udp_lrucache.c ────────────────────────────────────────────────────────
  * Single instantiation point for all typed LRU cache functions.

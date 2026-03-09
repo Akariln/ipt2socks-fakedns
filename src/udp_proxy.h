@@ -5,13 +5,14 @@
  * All UDP-proxy protocol types live here.
  * ──────────────────────────────────────────────────────────────────────── */
 
-#include "lrucache.h"   /* myhash_hh, MYLRU_HASH_*, LRU_DEFINE_*  */
-#include "netutils.h"   /* ip_port_t                           */
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
 #include "../libev/ev.h"
 
-#include <stdint.h>
-#include <stddef.h>
-#include <stdbool.h>
+#include "lrucache.h"   /* myhash_hh, MYLRU_HASH_*, LRU_DEFINE_*  */
+#include "netutils.h"   /* ip_port_t                           */
 
 /* ════════════════════════════════════════════════════════════════════════
  * Cache Capacity API
@@ -28,10 +29,14 @@ void udp_lrucache_set_maxsize(uint16_t base_size);
 
 #define MEMPOOL_BLOCK_SIZE    2048
 #define MEMPOOL_INITIAL_SIZE  256
+
 #define UDP_QUEUE_MAX_DEPTH   16
+#define UDP_BATCH_SIZE        16
 
 #define MAX_DOMAIN_LEN        255
 #define MAX_SOCKS5_UDP_HEADER 262
+
+#define SOCKS5_RESPONSE_MAX_SIZE 32
 
 /* ════════════════════════════════════════════════════════════════════════
  * Pending-packet queue  (used during SOCKS5 handshake)

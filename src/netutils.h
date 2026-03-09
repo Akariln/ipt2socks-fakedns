@@ -1,11 +1,11 @@
 #ifndef IPT2SOCKS_NETUTILS_H
 #define IPT2SOCKS_NETUTILS_H
 
+#include <netinet/in.h>
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <stdbool.h>
 #include <sys/socket.h>
-#include <netinet/in.h>
 
 #define IP4BINLEN 4
 #define IP6BINLEN 16

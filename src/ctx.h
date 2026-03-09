@@ -1,12 +1,15 @@
 #ifndef IPT2SOCKS_CTX_H
 #define IPT2SOCKS_CTX_H
 
-#include "udp_proxy.h"
-#include "mempool.h"
-
 #include <pthread.h>
+#include <stdint.h>
 
-#define UDP_BATCH_SIZE 16
+#include "../libev/ev.h"
+
+#include "mempool.h"
+#include "netutils.h"
+#include "udp_proxy.h"
+
 #define MAX_THREADS 64
 
 // Thread info structure for graceful shutdown

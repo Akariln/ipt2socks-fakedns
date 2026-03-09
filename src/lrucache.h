@@ -18,12 +18,12 @@
  *   - key field(s) must be plain value types (no pointers-into-struct needed)
  * ──────────────────────────────────────────────────────────────────────── */
 
+#include <stddef.h>
+#include <stdint.h>
+
 #include "xxhash.h"
 #define HASH_FUNCTION(key, len, hashv) { (hashv) = XXH32((key), (len), 0); }
 #include "uthash.h"
-
-#include <stdint.h>
-#include <stddef.h>
 
 /* ── uthash handle typedef (keeps business structs clean) ── */
 typedef UT_hash_handle myhash_hh;

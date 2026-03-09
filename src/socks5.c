@@ -1,6 +1,8 @@
 #include "socks5.h"
-#include "logutils.h"
+
 #include <string.h>
+
+#include "logutils.h"
 
 socks5_authreq_t g_socks5_auth_request = {
     .version = SOCKS5_VERSION,
