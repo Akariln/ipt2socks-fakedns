@@ -21,8 +21,8 @@ static inline void update_log_time(void) {
 void log_print(log_level_t level, const char *fmt, ...) {
     update_log_time();
 
-    const char *color = "";
-    const char *label = "";
+    const char *color;
+    const char *label;
 
     switch (level) {
         case LOG_LEVEL_INF:
@@ -37,6 +37,10 @@ void log_print(log_level_t level, const char *fmt, ...) {
         case LOG_LEVEL_WAR:
             color = "\e[1;33m"; // Yellow
             label = "WAR";
+            break;
+        default:
+            color = "";
+            label = "UNK";
             break;
     }
 

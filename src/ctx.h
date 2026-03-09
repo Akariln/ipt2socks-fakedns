@@ -1,14 +1,9 @@
 #ifndef IPT2SOCKS_CTX_H
 #define IPT2SOCKS_CTX_H
 
-#include "netutils.h"
-#include "lrucache.h"
+#include "udp_proxy.h"
 #include "mempool.h"
 
-#include "../libev/ev.h"
-
-#include <stdbool.h>
-#include <stdint.h>
 #include <pthread.h>
 
 #define UDP_BATCH_SIZE 16
@@ -38,7 +33,6 @@ enum {
     OPT_ENABLE_FAKEDNS     = 0x01 << 8, // enable fakedns feature
 };
 
-extern bool     g_verbose;
 extern uint16_t g_options;
 extern uint8_t  g_nthreads;
 extern uint8_t  g_udp_nthreads;

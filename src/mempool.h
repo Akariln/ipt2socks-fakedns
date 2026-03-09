@@ -45,7 +45,7 @@ void* mempool_calloc_sized(memory_pool_t *pool, size_t size);
  * @param block Pointer to memory block
  * @param size Original allocation size (kept for API compatibility, not used)
  */
-void mempool_free_sized(memory_pool_t *pool, void *block, size_t size);
+void mempool_free_sized(memory_pool_t *pool, void *ptr, size_t size);
 
 /**
  * Destroy memory pool and free all resources

@@ -123,9 +123,8 @@ int get_ipstr_family(const char *ipstr) {
     }
     if (inet_pton(AF_INET6, ipstr, &ipaddr) == 1) {
         return AF_INET6;
-    } else {
-        return -1; /* invalid */
     }
+    return -1; /* invalid */
 }
 
 void build_socket_addr(int family, void *skaddr, const char *ipstr, portno_t portno) {
@@ -430,7 +429,8 @@ int tcp_accept(int sockfd, void *addr, socklen_t *addrlen) {
 bool tcp_connect(int sockfd, const void *addr, const void *tfo_data, size_t tfo_datalen, ssize_t *tfo_nsend) {
     socklen_t addrlen = ((skaddr4_t *)addr)->sin_family == AF_INET ? sizeof(skaddr4_t) : sizeof(skaddr6_t);
     if (tfo_data && tfo_datalen && tfo_nsend) {
-        if ((*tfo_nsend = sendto(sockfd, tfo_data, tfo_datalen, MSG_FASTOPEN, addr, addrlen)) < 0 && errno != EINPROGRESS) {
+        *tfo_nsend = sendto(sockfd, tfo_data, tfo_datalen, MSG_FASTOPEN, addr, addrlen);
+        if (*tfo_nsend < 0 && errno != EINPROGRESS) {
             return false;
         }
     } else {
