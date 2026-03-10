@@ -87,13 +87,19 @@ typedef struct {
     bool           is_fakedns;   /* true ⟹ FakeDNS session                 */
 
     /* ── libev watchers ────────────────────────────── */
-    evio_t    tcp_watcher;  /* .data → handshake_buf during handshake, NULL after */
+    evio_t    tcp_watcher;  /* no longer uses .data for handshake buf */
     evio_t    udp_watcher;  /* .data → &pending_queue (handshake) | NULL (fwd)    */
     evtimer_t idle_timer;
 
     /* ── SOCKS5 handshake state ─────────────────────── */
-    /* Layout: [uint16_t nsend][uint16_t nrecv][response bytes…] */
-    uint8_t handshake_buf[32];
+    union {
+        uint8_t handshake_buf[32];
+        struct {
+            uint16_t nbytes;    /* current nsend or nrecv */
+            uint16_t step_len;  /* expected packet size for this phase */
+            uint8_t  payload[28];
+        } handshake;
+    };
 
     /* ── pending packet queue (buffered during handshake) ── */
     udp_packet_queue_t pending_queue;

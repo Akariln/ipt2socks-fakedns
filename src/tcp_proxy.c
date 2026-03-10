@@ -14,9 +14,6 @@
 
 /* splice() api */
 #ifndef SPLICE_F_MOVE
-// #include <sys/syscall.h> // Moved to top-level includes
-
-#undef  SPLICE_F_MOVE
 #define SPLICE_F_MOVE 1
 
 #undef  SPLICE_F_NONBLOCK
@@ -37,11 +34,7 @@ static void tcp_stream_payload_forward_cb(evloop_t *evloop, evio_t *watcher, int
 
 
 static inline tcp_context_t* get_tcpctx_by_watcher(evio_t *watcher) {
-    if (watcher->events & EV_CUSTOM) {
-        return (void *)watcher - offsetof(tcp_context_t, client_watcher);
-    }
-    return (void *)watcher - offsetof(tcp_context_t, socks5_watcher);
-
+    return (tcp_context_t *)watcher->data;
 }
 
 static inline void tcp_context_release(evloop_t *evloop, tcp_context_t *context, bool is_tcp_reset) {
@@ -56,7 +49,7 @@ static inline void tcp_context_release(evloop_t *evloop, tcp_context_t *context,
         close(client_watcher->fd);
         close(socks5_watcher->fd);
     }
-    // No need to free watcher.data as they point to embedded buffer
+
     if (context->client_pipefd[0] != -1) {
         close(context->client_pipefd[0]);
     }
@@ -94,7 +87,7 @@ void tcp_proxy_close_all_sessions(evloop_t *evloop) {
 }
 
 void tcp_tproxy_accept_cb(evloop_t *evloop, evio_t *accept_watcher, int revents __attribute__((unused))) {
-    bool isipv4 = accept_watcher->data;
+    bool isipv4 = (intptr_t)accept_watcher->data;
     skaddr6_t skaddr;
     char ipstr[IP6STRLEN];
     portno_t portno;
@@ -181,16 +174,16 @@ void tcp_tproxy_accept_cb(evloop_t *evloop, evio_t *accept_watcher, int revents 
     }
     g_tcp_session_head = context;
 
-    /* if (watcher->events & EV_CUSTOM); then it is client watcher; fi */
+    /* Link watcher data to parent context */
+    context->client_watcher.data = context;
+    context->socks5_watcher.data = context;
+
     evio_t *watcher = &context->client_watcher;
-    ev_io_init(watcher, tcp_stream_payload_forward_cb, client_sockfd, EV_READ | EV_CUSTOM);
+    ev_io_init(watcher, tcp_stream_payload_forward_cb, client_sockfd, EV_READ);
 
     /* build the ipv4/ipv6 proxy request (send to the socks5 proxy server) */
-    /* Use embedded buffer for request (offset 0) */
-    context->client_watcher.data = context->handshake_buf;
-
     size_t actual_len = 0;
-    socks5_proxy_request_make(context->client_watcher.data, &skaddr, fake_domain, &actual_len);
+    socks5_proxy_request_make(context->handshake.req, &skaddr, fake_domain, &actual_len);
     context->client_length = actual_len;
 
     watcher = &context->socks5_watcher;
@@ -203,8 +196,6 @@ void tcp_tproxy_accept_cb(evloop_t *evloop, evio_t *accept_watcher, int revents 
     }
     ev_io_start(evloop, watcher);
 
-    /* Use embedded buffer for response (offset 290, providing 30 bytes space) */
-    context->socks5_watcher.data = context->handshake_buf + 290;
     context->socks5_length = (size_t)tfo_nsend;
 }
 
@@ -222,7 +213,8 @@ static void tcp_socks5_connect_cb(evloop_t *evloop, evio_t *socks5_watcher, int 
 /* return: -1(error_occurred); 0(partial_sent); 1(completely_sent) */
 static int tcp_socks5_send_request(const char *funcname, evloop_t *evloop, evio_t *socks5_watcher, const void *data, size_t datalen) {
     tcp_context_t *context = get_tcpctx_by_watcher(socks5_watcher);
-    ssize_t nsend = send(socks5_watcher->fd, data + context->socks5_length, datalen - context->socks5_length, 0);
+    const uint8_t *pdata = (const uint8_t *)data;
+    ssize_t nsend = send(socks5_watcher->fd, pdata + context->socks5_length, datalen - context->socks5_length, 0);
     if (nsend < 0) {
         if (errno != EAGAIN && errno != EWOULDBLOCK) {
             LOGERR("[%s] send to %s#%hu: %s", funcname, g_server_ipstr, g_server_portno, strerror(errno));
@@ -243,7 +235,8 @@ static int tcp_socks5_send_request(const char *funcname, evloop_t *evloop, evio_
 /* return: -1(error_occurred); 0(partial_recv); 1(completely_recv) */
 static int tcp_socks5_recv_response(const char *funcname, evloop_t *evloop, evio_t *socks5_watcher, void *data, size_t datalen) {
     tcp_context_t *context = get_tcpctx_by_watcher(socks5_watcher);
-    ssize_t nrecv = recv(socks5_watcher->fd, data + context->socks5_length, datalen - context->socks5_length, 0);
+    uint8_t *pdata = (uint8_t *)data;
+    ssize_t nrecv = recv(socks5_watcher->fd, pdata + context->socks5_length, datalen - context->socks5_length, 0);
     if (nrecv < 0) {
         if (errno != EAGAIN && errno != EWOULDBLOCK) {
             LOGERR("[%s] recv from %s#%hu: %s", funcname, g_server_ipstr, g_server_portno, strerror(errno));
@@ -276,15 +269,15 @@ static void tcp_socks5_send_authreq_cb(evloop_t *evloop, evio_t *socks5_watcher,
 }
 
 static void tcp_socks5_recv_authresp_cb(evloop_t *evloop, evio_t *socks5_watcher, int revents __attribute__((unused))) {
-    if (tcp_socks5_recv_response("tcp_socks5_recv_authresp_cb", evloop, socks5_watcher, socks5_watcher->data, sizeof(socks5_authresp_t)) != 1) {
-        return;
-    }
-    if (!socks5_auth_response_check("tcp_socks5_recv_authresp_cb", socks5_watcher->data)) {
-        tcp_context_release(evloop, get_tcpctx_by_watcher(socks5_watcher), true);
-        return;
-    }
     tcp_context_t *context = get_tcpctx_by_watcher(socks5_watcher);
-    const void *data = g_socks5_usrpwd_requestlen ? &g_socks5_usrpwd_request : context->client_watcher.data;
+    if (tcp_socks5_recv_response("tcp_socks5_recv_authresp_cb", evloop, socks5_watcher, context->handshake.resp, sizeof(socks5_authresp_t)) != 1) {
+        return;
+    }
+    if (!socks5_auth_response_check("tcp_socks5_recv_authresp_cb", (const socks5_authresp_t *)context->handshake.resp)) {
+        tcp_context_release(evloop, context, true);
+        return;
+    }
+    const void *data = g_socks5_usrpwd_requestlen ? (const void *)&g_socks5_usrpwd_request : (const void *)context->handshake.req;
     uint16_t datalen = g_socks5_usrpwd_requestlen ? g_socks5_usrpwd_requestlen : context->client_length;
     int ret = tcp_socks5_send_request("tcp_socks5_recv_authresp_cb", evloop, socks5_watcher, data, datalen);
     if (ret == 1) {
@@ -309,15 +302,15 @@ static void tcp_socks5_send_usrpwdreq_cb(evloop_t *evloop, evio_t *socks5_watche
 }
 
 static void tcp_socks5_recv_usrpwdresp_cb(evloop_t *evloop, evio_t *socks5_watcher, int revents __attribute__((unused))) {
-    if (tcp_socks5_recv_response("tcp_socks5_recv_usrpwdresp_cb", evloop, socks5_watcher, socks5_watcher->data, sizeof(socks5_usrpwdresp_t)) != 1) {
-        return;
-    }
-    if (!socks5_usrpwd_response_check("tcp_socks5_recv_usrpwdresp_cb", socks5_watcher->data)) {
-        tcp_context_release(evloop, get_tcpctx_by_watcher(socks5_watcher), true);
-        return;
-    }
     tcp_context_t *context = get_tcpctx_by_watcher(socks5_watcher);
-    int ret = tcp_socks5_send_request("tcp_socks5_recv_usrpwdresp_cb", evloop, socks5_watcher, context->client_watcher.data, context->client_length);
+    if (tcp_socks5_recv_response("tcp_socks5_recv_usrpwdresp_cb", evloop, socks5_watcher, context->handshake.resp, sizeof(socks5_usrpwdresp_t)) != 1) {
+        return;
+    }
+    if (!socks5_usrpwd_response_check("tcp_socks5_recv_usrpwdresp_cb", (const socks5_usrpwdresp_t *)context->handshake.resp)) {
+        tcp_context_release(evloop, context, true);
+        return;
+    }
+    int ret = tcp_socks5_send_request("tcp_socks5_recv_usrpwdresp_cb", evloop, socks5_watcher, context->handshake.req, context->client_length);
     if (ret == 1) {
         ev_set_cb(socks5_watcher, tcp_socks5_recv_proxyresp_cb);
         context->client_length = 5; // response_length (header prefix)
@@ -330,7 +323,7 @@ static void tcp_socks5_recv_usrpwdresp_cb(evloop_t *evloop, evio_t *socks5_watch
 
 static void tcp_socks5_send_proxyreq_cb(evloop_t *evloop, evio_t *socks5_watcher, int revents __attribute__((unused))) {
     tcp_context_t *context = get_tcpctx_by_watcher(socks5_watcher);
-    if (tcp_socks5_send_request("tcp_socks5_send_proxyreq_cb", evloop, socks5_watcher, context->client_watcher.data, context->client_length) != 1) {
+    if (tcp_socks5_send_request("tcp_socks5_send_proxyreq_cb", evloop, socks5_watcher, context->handshake.req, context->client_length) != 1) {
         return;
     }
     ev_io_stop(evloop, socks5_watcher);
@@ -341,13 +334,13 @@ static void tcp_socks5_send_proxyreq_cb(evloop_t *evloop, evio_t *socks5_watcher
 
 static void tcp_socks5_recv_proxyresp_cb(evloop_t *evloop, evio_t *socks5_watcher, int revents __attribute__((unused))) {
     tcp_context_t *context = get_tcpctx_by_watcher(socks5_watcher);
-    if (tcp_socks5_recv_response("tcp_socks5_recv_proxyresp_cb", evloop, socks5_watcher, socks5_watcher->data, context->client_length) != 1) {
+    if (tcp_socks5_recv_response("tcp_socks5_recv_proxyresp_cb", evloop, socks5_watcher, context->handshake.resp, context->client_length) != 1) {
         return;
     }
 
     /* If we just read the first 5 bytes (Header prefix) */
     if (context->client_length == 5) {
-        uint8_t atype = ((socks5_ipv4resp_t *)socks5_watcher->data)->addrtype;
+        uint8_t atype = ((socks5_ipv4resp_t *)context->handshake.resp)->addrtype;
         size_t total_len;
 
         if (atype == SOCKS5_ADDRTYPE_IPV4) {
@@ -367,32 +360,23 @@ static void tcp_socks5_recv_proxyresp_cb(evloop_t *evloop, evio_t *socks5_watche
         }
 
         if (total_len > 5) {
-            /* We are using embedded buffer, no realloc needed as we reserved 30 bytes.
-             * context->socks5_watcher.data already points to handshake_buf + 290.
-             */
-
             /* Update length targets */
             context->client_length = total_len;
             context->socks5_length = 5; /* We already have 5 bytes */
 
             /* Attempt to read the rest immediately */
-            if (tcp_socks5_recv_response("tcp_socks5_recv_proxyresp_cb", evloop, socks5_watcher, socks5_watcher->data, context->client_length) != 1) {
+            if (tcp_socks5_recv_response("tcp_socks5_recv_proxyresp_cb", evloop, socks5_watcher, context->handshake.resp, context->client_length) != 1) {
                 return;
             }
         }
     }
 
-    if (!socks5_proxy_response_check("tcp_socks5_recv_proxyresp_cb", socks5_watcher->data)) {
+    if (!socks5_proxy_response_check("tcp_socks5_recv_proxyresp_cb", (const socks5_ipv4resp_t *)context->handshake.resp)) {
         tcp_context_release(evloop, context, true);
         return;
     }
 
     context->client_length = 0;
-
-    // ... remainder of function ...
-
-    socks5_watcher->data = NULL;
-    context->client_watcher.data = NULL;
 
     if (new_nonblock_pipefd(context->client_pipefd) < 0) {
         LOGERR("[tcp_socks5_recv_proxyresp_cb] failed to create client pipe");
@@ -411,8 +395,8 @@ static void tcp_socks5_recv_proxyresp_cb(evloop_t *evloop, evio_t *socks5_watche
 }
 
 static void tcp_stream_payload_forward_cb(evloop_t *evloop, evio_t *self_watcher, int revents) {
-    bool self_is_client = self_watcher->events & EV_CUSTOM;
     tcp_context_t *context = get_tcpctx_by_watcher(self_watcher);
+    bool self_is_client = (self_watcher == &context->client_watcher);
     evio_t *peer_watcher = self_is_client ? &context->socks5_watcher : &context->client_watcher;
     bool *self_eof = self_is_client ? &context->client_eof : &context->socks5_eof;
     bool *peer_eof = self_is_client ? &context->socks5_eof : &context->client_eof;
@@ -441,9 +425,10 @@ static void tcp_stream_payload_forward_cb(evloop_t *evloop, evio_t *self_watcher
                 LOGINF("[tcp_stream_payload_forward_cb] recv FIN from %s stream", self_is_client ? "client" : "socks5");
             }
             *self_eof = true;
+            int new_events = self_watcher->events & ~EV_READ;
             ev_io_stop(evloop, self_watcher);
-            ev_io_modify(self_watcher, self_watcher->events & ~EV_READ);
-            if (self_watcher->events & EV_WRITE) {
+            if (new_events) {
+                ev_io_set(self_watcher, self_watcher->fd, new_events);
                 ev_io_start(evloop, self_watcher);
             }
 
@@ -469,14 +454,16 @@ static void tcp_stream_payload_forward_cb(evloop_t *evloop, evio_t *self_watcher
             if (nsend < nrecv) {
                 *self_length = (size_t)(nrecv - nsend); // remain_length
 
+                int new_self_events = self_watcher->events & ~EV_READ;
                 ev_io_stop(evloop, self_watcher);
-                ev_io_modify(self_watcher, self_watcher->events & ~EV_READ);
-                if (self_watcher->events & EV_WRITE) {
+                if (new_self_events) {
+                    ev_io_set(self_watcher, self_watcher->fd, new_self_events);
                     ev_io_start(evloop, self_watcher);
                 }
 
+                int new_peer_events = peer_watcher->events | EV_WRITE;
                 ev_io_stop(evloop, peer_watcher);
-                ev_io_modify(peer_watcher, peer_watcher->events | EV_WRITE);
+                ev_io_set(peer_watcher, peer_watcher->fd, new_peer_events);
                 ev_io_start(evloop, peer_watcher);
             }
         }
@@ -504,15 +491,17 @@ DO_WRITE:
             *peer_length -= (uint16_t)nsend;
 
             if (*peer_length == 0) {
+                int new_events = self_watcher->events & ~EV_WRITE;
                 ev_io_stop(evloop, self_watcher);
-                ev_io_modify(self_watcher, self_watcher->events & ~EV_WRITE);
-                if (self_watcher->events & EV_READ) {
+                if (new_events) {
+                    ev_io_set(self_watcher, self_watcher->fd, new_events);
                     ev_io_start(evloop, self_watcher);
                 }
 
                 if (!*peer_eof) {
+                    int peer_new_events = peer_watcher->events | EV_READ;
                     ev_io_stop(evloop, peer_watcher);
-                    ev_io_modify(peer_watcher, peer_watcher->events | EV_READ);
+                    ev_io_set(peer_watcher, peer_watcher->fd, peer_new_events);
                     ev_io_start(evloop, peer_watcher);
                 } else {
                     shutdown(self_watcher->fd, SHUT_WR);
