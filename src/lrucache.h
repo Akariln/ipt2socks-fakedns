@@ -25,7 +25,7 @@
 #define HASH_FUNCTION(key, len, hashv) { (hashv) = XXH32((key), (len), 0); }
 #include "uthash.h"
 
-/* ── uthash handle typedef (keeps business structs clean) ── */
+/* ── uthash handle typedef (keeps domain structs clean) ── */
 typedef UT_hash_handle myhash_hh;
 
 /* ── Thin uthash wrappers ── */
