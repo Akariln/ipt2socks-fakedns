@@ -395,7 +395,7 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
 
     /* Tunnel not ready if udp_watcher.data != NULL */
     if (context->udp_watcher.data) {
-        udp_packet_queue_t *queue = context->udp_watcher.data;
+        udp_packet_queue_t *queue = &context->pending_queue;
 
         if (queue->count >= UDP_QUEUE_MAX_DEPTH) {
             LOGWAR("[handle_udp_socket_msg] packet queue full (%zu), dropping this msg", queue->count);
@@ -687,7 +687,7 @@ static void udp_socks5_recv_proxyresp_cb(evloop_t *evloop, evio_t *tcp_watcher, 
         return;
     }
 
-    udp_packet_queue_t *queue = context->udp_watcher.data;
+    udp_packet_queue_t *queue = &context->pending_queue;
     udp_packet_node_t *curr = queue->head;
     while (curr) {
         ssize_t nsend = send(udp_sockfd, curr->data, curr->len, 0);
@@ -725,6 +725,9 @@ static void udp_socks5_recv_proxyresp_cb(evloop_t *evloop, evio_t *tcp_watcher, 
         curr = next;
     }
 
+    context->pending_queue.head = NULL;
+    context->pending_queue.tail = NULL;
+    context->pending_queue.count = 0;
     context->udp_watcher.data = NULL;
 
     ev_set_cb(tcp_watcher, udp_socks5_recv_tcpmessage_cb);
@@ -1036,7 +1039,7 @@ static void udp_socks5_context_timeout_cb(evloop_t *evloop, evtimer_t *idle_time
     close(context->tcp_watcher.fd);
 
     if (context->udp_watcher.data) {
-        udp_packet_queue_t *queue = context->udp_watcher.data;
+        udp_packet_queue_t *queue = &context->pending_queue;
         udp_packet_node_t *curr = queue->head;
         while (curr) {
             udp_packet_node_t *next = curr->next;
@@ -1044,7 +1047,6 @@ static void udp_socks5_context_timeout_cb(evloop_t *evloop, evtimer_t *idle_time
             mempool_free_sized(g_udp_packet_pool, curr, node_size);
             curr = next;
         }
-        context->udp_watcher.data = NULL;
     } else {
         ev_io_stop(evloop, &context->udp_watcher);
         close(context->udp_watcher.fd);
