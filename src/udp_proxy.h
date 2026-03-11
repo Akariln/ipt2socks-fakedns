@@ -9,7 +9,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "../libev/ev.h"
+#include "ev_types.h"
 
 #include "lrucache.h"   /* myhash_hh, MYLRU_HASH_*, LRU_DEFINE_*  */
 #include "netutils.h"   /* ip_port_t                           */

@@ -4,7 +4,7 @@
 #include <pthread.h>
 #include <stdint.h>
 
-#include "../libev/ev.h"
+#include "ev_types.h"
 
 #include "mempool.h"
 #include "netutils.h"

@@ -6,7 +6,7 @@ CFLAGS = -std=c99 -Wall -Wextra -Wvla -pthread -O3 -flto=auto \
          -fno-strict-aliasing -ffunction-sections -fdata-sections \
          -DNDEBUG -MMD -MP $(EXTRA_CFLAGS)
 
-CFLAGS += -D_GNU_SOURCE
+CFLAGS += -D_GNU_SOURCE -include src/libev_config.h
 
 LDFLAGS = -pthread -O3 -flto=auto -Wl,--gc-sections -s $(EXTRA_LDFLAGS)
 
@@ -53,7 +53,7 @@ debug:
 	$(MAKE) clean
 	$(MAKE) CFLAGS="-std=c99 -Wall -Wextra -Wvla -pthread -O0 -g \
 		-fno-strict-aliasing -MMD -MP -DENABLE_SENDTO_LOG -DFAKEDNS_MRU_STATS \
-		-D_GNU_SOURCE -fsanitize=address,undefined $(EXTRA_CFLAGS)" \
+		-D_GNU_SOURCE -include src/libev_config.h -fsanitize=address,undefined $(EXTRA_CFLAGS)" \
 		LDFLAGS="-pthread -g -fsanitize=address,undefined $(EXTRA_LDFLAGS)" \
 		all
 

@@ -37,8 +37,6 @@
  * either the BSD or the GPL.
  */
 
-#include "config.h"
-
 /* this big block deduces configuration from config.h */
 #ifndef EV_STANDALONE
 # ifdef EV_CONFIG_H
@@ -239,7 +237,6 @@
 # include <sys/time.h>
 # include <sys/wait.h>
 # include <unistd.h>
-# include <syscall.h>
 #else
 # include <io.h>
 # define WIN32_LEAN_AND_MEAN
@@ -580,7 +577,7 @@ struct signalfd_siginfo
  * This value is good at least till the year 4000.
  */
 #define MIN_INTERVAL  0.0001220703125 /* 1/2**13, good till 4000 */
-//#define MIN_INTERVAL  0.00000095367431640625 /* 1/2**20, good till 2200 */
+/*#define MIN_INTERVAL  0.00000095367431640625 /* 1/2**20, good till 2200 */
 
 #define MIN_TIMEJUMP   1. /* minimum timejump that gets detected (if monotonic clock available) */
 #define MAX_BLOCKTIME  59.743 /* never wait longer than this time (to detect time jumps) */
@@ -792,6 +789,7 @@ struct signalfd_siginfo
 
 #ifndef ECB_MEMORY_FENCE
   #if ECB_GCC_VERSION(2,5) || defined __INTEL_COMPILER || (__llvm__ && __GNUC__) || __SUNPRO_C >= 0x5110 || __SUNPRO_CC >= 0x5110
+    #define ECB_MEMORY_FENCE_RELAXED __asm__ __volatile__ ("" : : : "memory")
     #if __i386 || __i386__
       #define ECB_MEMORY_FENCE         __asm__ __volatile__ ("lock; orb $0, -1(%%esp)" : : : "memory")
       #define ECB_MEMORY_FENCE_ACQUIRE __asm__ __volatile__ (""                        : : : "memory")
@@ -809,7 +807,6 @@ struct signalfd_siginfo
       || defined __ARM_ARCH_5T__ || defined __ARM_ARCH_5TE__ \
       || defined __ARM_ARCH_5TEJ__
       /* should not need any, unless running old code on newer cpu - arm doesn't support that */
-      #define ECB_MEMORY_FENCE do { } while (0)
     #elif defined __ARM_ARCH_6__  || defined __ARM_ARCH_6J__  \
        || defined __ARM_ARCH_6K__ || defined __ARM_ARCH_6ZK__ \
        || defined __ARM_ARCH_6T2__
@@ -852,12 +849,14 @@ struct signalfd_siginfo
     #define ECB_MEMORY_FENCE         __atomic_thread_fence (__ATOMIC_SEQ_CST)
     #define ECB_MEMORY_FENCE_ACQUIRE __atomic_thread_fence (__ATOMIC_ACQUIRE)
     #define ECB_MEMORY_FENCE_RELEASE __atomic_thread_fence (__ATOMIC_RELEASE)
+    #define ECB_MEMORY_FENCE_RELAXED __atomic_thread_fence (__ATOMIC_RELAXED)
 
   #elif ECB_CLANG_EXTENSION(c_atomic)
     /* see comment below (stdatomic.h) about the C11 memory model. */
     #define ECB_MEMORY_FENCE         __c11_atomic_thread_fence (__ATOMIC_SEQ_CST)
     #define ECB_MEMORY_FENCE_ACQUIRE __c11_atomic_thread_fence (__ATOMIC_ACQUIRE)
     #define ECB_MEMORY_FENCE_RELEASE __c11_atomic_thread_fence (__ATOMIC_RELEASE)
+    #define ECB_MEMORY_FENCE_RELAXED __c11_atomic_thread_fence (__ATOMIC_RELAXED)
 
   #elif ECB_GCC_VERSION(4,4) || defined __INTEL_COMPILER || defined __clang__
     #define ECB_MEMORY_FENCE         __sync_synchronize ()
@@ -880,6 +879,7 @@ struct signalfd_siginfo
     #define ECB_MEMORY_FENCE         __machine_rw_barrier  ()
     #define ECB_MEMORY_FENCE_ACQUIRE __machine_acq_barrier ()
     #define ECB_MEMORY_FENCE_RELEASE __machine_rel_barrier ()
+    #define ECB_MEMORY_FENCE_RELAXED __compiler_barrier ()
   #elif __xlC__
     #define ECB_MEMORY_FENCE         __sync ()
   #endif
@@ -920,6 +920,10 @@ struct signalfd_siginfo
 
 #if !defined ECB_MEMORY_FENCE_RELEASE && defined ECB_MEMORY_FENCE
   #define ECB_MEMORY_FENCE_RELEASE ECB_MEMORY_FENCE
+#endif
+
+#if !defined ECB_MEMORY_FENCE_RELAXED && defined ECB_MEMORY_FENCE
+  #define ECB_MEMORY_FENCE_RELAXED ECB_MEMORY_FENCE /* very heavy-handed */
 #endif
 
 /*****************************************************************************/
@@ -4095,7 +4099,7 @@ ev_run (EV_P_ int flags)
             if (ecb_expect_true (timerfd >= 0))
               waittime = EV_TS_CONST (MAX_BLOCKTIME2);
 #endif
-#if !EV_PERIODIC_ENABLE && EV_USE_MONOTONIC
+#if !EV_PERIODIC_ENABLE
             /* without periodics but with monotonic clock there is no need */
             /* for any time jump detection, so sleep longer */
             if (ecb_expect_true (have_monotonic))
@@ -4333,7 +4337,7 @@ ev_io_start (EV_P_ ev_io *w) EV_NOEXCEPT
     return;
 
   assert (("libev: ev_io_start called with negative fd", fd >= 0));
-  assert (("libev: ev_io_start called with illegal event mask", !(w->events & ~(EV__IOFDSET | EV_READ | EV_WRITE | EV_CUSTOM))));
+  assert (("libev: ev_io_start called with illegal event mask", !(w->events & ~(EV__IOFDSET | EV_READ | EV_WRITE))));
 
 #if EV_VERIFY >= 2
   assert (("libev: ev_io_start called on watcher with invalid fd", fd_valid (fd)));
@@ -4347,7 +4351,7 @@ ev_io_start (EV_P_ ev_io *w) EV_NOEXCEPT
   /* common bug, apparently */
   assert (("libev: ev_io_start called with corrupted watcher", ((WL)w)->next != (WL)w));
 
-  fd_change (EV_A_ fd, (w->events & EV__IOFDSET) | EV_ANFD_REIFY);
+  fd_change (EV_A_ fd, w->events & EV__IOFDSET | EV_ANFD_REIFY);
   w->events &= ~EV__IOFDSET;
 
   EV_FREQUENT_CHECK;
