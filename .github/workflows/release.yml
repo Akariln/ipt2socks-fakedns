@@ -63,15 +63,19 @@ jobs:
       - name: Build with Docker
         run: |
           docker run --rm -v "$(pwd):/src" -w /src muslcc/x86_64:${{ matrix.target }} \
-            /bin/sh -c "gcc -std=c99 -Wall -Wextra -Wvla -pthread -O3 -flto=auto -fno-strict-aliasing -ffunction-sections -fdata-sections \
-                        -DNDEBUG -D_GNU_SOURCE \
-                        ${{ matrix.cflags }} \
-                        -Wl,--gc-sections -s -static \
-                        -o ipt2socks \
-                        src/main.c src/ctx.c src/netutils.c src/socks5.c libev/ev.c src/fakedns.c \
-                        src/fakedns_server.c src/xxhash.c src/logutils.c src/mempool.c src/udp_proxy.c src/tcp_proxy.c \
-                        src/udp_lrucache.c \
-                        -lm"
+              /bin/sh -c "\
+              gcc -std=c99 -Wall -Wextra -Wvla -pthread -O3 -flto=auto -fno-strict-aliasing -ffunction-sections -fdata-sections \
+                  -DNDEBUG -D_GNU_SOURCE ${{ matrix.cflags }} \
+                  -include src/libev_config.h -w -c libev/ev.c -o libev/ev.o && \
+              gcc -std=c99 -Wall -Wextra -Wvla -pthread -O3 -flto=auto -fno-strict-aliasing -ffunction-sections -fdata-sections \
+                  -DNDEBUG -D_GNU_SOURCE ${{ matrix.cflags }} \
+                  -I./uthash -I./xxhash \
+                  -Wl,--gc-sections -s -static \
+                  -o ipt2socks \
+                  src/main.c src/ctx.c src/netutils.c src/socks5.c src/fakedns.c \
+                  src/fakedns_server.c xxhash/xxhash.c src/logutils.c src/mempool.c src/udp_proxy.c src/tcp_proxy.c \
+                  src/udp_lrucache.c \
+                  libev/ev.o -lm"
 
           # Fix ownership
           sudo chown -R $USER:$USER .
