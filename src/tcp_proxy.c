@@ -422,7 +422,9 @@ static void tcp_stream_payload_forward_cb(evloop_t *evloop, struct ev_watcher *w
                         LOGINF("[tcp_stream_payload_forward_cb] recv from %s stream: %s, cascade RST", self_is_client ? "client" : "socks5", strerror(errno));
                     }
                 } else {
-                    LOGERR("[tcp_stream_payload_forward_cb] recv from %s stream: %s", self_is_client ? "client" : "socks5", strerror(errno));
+                    IF_VERBOSE {
+                        LOGERR("[tcp_stream_payload_forward_cb] recv from %s stream: %s", self_is_client ? "client" : "socks5", strerror(errno));
+                    }
                 }
                 tcp_context_release(evloop, context, true);
                 return;
