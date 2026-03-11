@@ -135,6 +135,11 @@ udp_socks5ctx_t* udp_socks5ctx_get(udp_socks5ctx_t **cache, const ip_port_t     
 udp_socks5ctx_t* udp_socks5ctx_fork_get(udp_socks5ctx_t **cache, const udp_fork_key_t *keyptr);
 udp_tproxyctx_t* udp_tproxyctx_get(udp_tproxyctx_t **cache, const ip_port_t      *keyptr);
 
+/* find — pure lookup, no LRU bump; for batch hot paths */
+udp_socks5ctx_t* udp_socks5ctx_find(udp_socks5ctx_t **cache, const ip_port_t      *keyptr);
+udp_socks5ctx_t* udp_socks5ctx_fork_find(udp_socks5ctx_t **cache, const udp_fork_key_t *keyptr);
+udp_tproxyctx_t* udp_tproxyctx_find(udp_tproxyctx_t **cache, const ip_port_t      *keyptr);
+
 /* del — unconditional removal */
 void udp_socks5ctx_del(udp_socks5ctx_t **cache, udp_socks5ctx_t *entry);
 void udp_tproxyctx_del(udp_tproxyctx_t **cache, udp_tproxyctx_t *entry);
@@ -146,6 +151,7 @@ void udp_tproxyctx_del(udp_tproxyctx_t **cache, udp_tproxyctx_t *entry);
  */
 void udp_socks5ctx_touch_main(udp_socks5ctx_t **cache, udp_socks5ctx_t *entry);
 void udp_socks5ctx_touch_fork(udp_socks5ctx_t **cache, udp_socks5ctx_t *entry);
+void udp_tproxyctx_touch(udp_tproxyctx_t **cache, udp_tproxyctx_t *entry);
 
 /*
  * clear — iterate over all entries and invoke a callback, safe for removal.

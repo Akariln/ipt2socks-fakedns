@@ -89,10 +89,23 @@ LRU_DEFINE_DEL(udp_tproxyctx_del,
  *
  *   Main Table:  udp_socks5ctx_touch_main  (uses key_ipport)
  *   Fork Table:  udp_socks5ctx_touch_fork  (uses fork_key)
+ *   TProxy Table: udp_tproxyctx_touch      (uses key_ipport)
  * ════════════════════════════════════════════════════════════════════════ */
 
 LRU_DEFINE_TOUCH(udp_socks5ctx_touch_main, udp_socks5ctx_t, key_ipport)
 LRU_DEFINE_TOUCH(udp_socks5ctx_touch_fork, udp_socks5ctx_t, fork_key)
+LRU_DEFINE_TOUCH(udp_tproxyctx_touch,      udp_tproxyctx_t, key_ipport)
+
+/* ════════════════════════════════════════════════════════════════════════
+ * Find / Pure Lookup  (LRU_DEFINE_FIND)
+ *
+ * Pure HASH_FIND without LRU bump (no DEL+ADD).
+ * Used in batch hot paths; callers defer LRU update to batch-end TOUCH.
+ * ════════════════════════════════════════════════════════════════════════ */
+
+LRU_DEFINE_FIND(udp_socks5ctx_find,      udp_socks5ctx_t, ip_port_t)
+LRU_DEFINE_FIND(udp_socks5ctx_fork_find, udp_socks5ctx_t, udp_fork_key_t)
+LRU_DEFINE_FIND(udp_tproxyctx_find,      udp_tproxyctx_t, ip_port_t)
 
 /* ════════════════════════════════════════════════════════════════════════
  * Clear All  (LRU_DEFINE_CLEAR)

@@ -13,7 +13,7 @@
 #include "socks5.h"
 
 /* Forward declarations */
-static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, struct msghdr *msg, ssize_t nrecv, char *buffer);
+static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, struct msghdr *msg, ssize_t nrecv, char *buffer, udp_socks5ctx_t **out_context);
 static void udp_socks5_connect_cb(evloop_t *evloop, struct ev_watcher *watcher, int revents);
 static void udp_socks5_send_authreq_cb(evloop_t *evloop, struct ev_watcher *watcher, int revents);
 static void udp_socks5_recv_authresp_cb(evloop_t *evloop, struct ev_watcher *watcher, int revents);
@@ -69,8 +69,33 @@ void udp_tproxy_recvmsg_cb(evloop_t *evloop, struct ev_watcher *watcher, int rev
         return;
     }
 
+    udp_socks5ctx_t *touched[UDP_BATCH_SIZE];
+    int touched_count = 0;
+
     for (int i = 0; i < retval; i++) {
-        handle_udp_socket_msg(evloop, tprecv_watcher, &msgs[i].msg_hdr, msgs[i].msg_len, g_udp_batch_buffer[i]);
+        udp_socks5ctx_t *ctx = NULL;
+        handle_udp_socket_msg(evloop, tprecv_watcher, &msgs[i].msg_hdr, msgs[i].msg_len, g_udp_batch_buffer[i], &ctx);
+        if (ctx) {
+            /* Linear dedup — UDP_BATCH_SIZE is small (16) */
+            bool dup = false;
+            for (int j = 0; j < touched_count; j++) {
+                if (touched[j] == ctx) {
+                    dup = true;
+                    break;
+                }
+            }
+            if (!dup) touched[touched_count++] = ctx;
+        }
+    }
+
+    /* Batch-end: single LRU touch + timer reset per unique context */
+    for (int i = 0; i < touched_count; i++) {
+        if (touched[i]->is_forked) {
+            udp_socks5ctx_touch_fork(&g_udp_fork_table, touched[i]);
+        } else {
+            udp_socks5ctx_touch_main(&g_udp_socks5ctx_table, touched[i]);
+        }
+        ev_timer_again(evloop, &touched[i]->idle_timer);
     }
 }
 
@@ -126,7 +151,8 @@ static char *build_socks5_udp_header(char *payload_start, const char *fake_domai
     return header_start;
 }
 
-static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, struct msghdr *msg, ssize_t nrecv, char *buffer) {
+static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, struct msghdr *msg, ssize_t nrecv, char *buffer, udp_socks5ctx_t **out_context) {
+    *out_context = NULL;
     bool isipv4 = (intptr_t)tprecv_watcher->data;
     skaddr6_t skaddr;
     char ipstr[IP6STRLEN];
@@ -229,7 +255,7 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
      */
     if (fake_domain) {
         /* Strategy A: FakeDNS Traffic -> Fork Table Only */
-        context = udp_socks5ctx_fork_get(&g_udp_fork_table, &fork_key);
+        context = udp_socks5ctx_fork_find(&g_udp_fork_table, &fork_key);
 
         if (!context) {
             /* Not found, new session needed. Force fork to ensure it goes to Fork Table on creation */
@@ -246,7 +272,7 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
         /* Strategy B: Real IP Traffic -> Main Table (Full Cone) -> Fork Table (Fallback) */
 
         /* Step 1: Check Main Table (Fast Path, Full Cone) */
-        udp_socks5ctx_t *main_ctx = udp_socks5ctx_get(&g_udp_socks5ctx_table, &key_ipport);
+        udp_socks5ctx_t *main_ctx = udp_socks5ctx_find(&g_udp_socks5ctx_table, &key_ipport);
 
         if (main_ctx) {
             /* Check for collisions that require forking:
@@ -273,7 +299,7 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
          * If collision (force_fork=true), try Fork Table; if also missed, create new Fork entry.
          * If no collision (force_fork=false), create new Main entry. */
         if (!context) {
-            context = udp_socks5ctx_fork_get(&g_udp_fork_table, &fork_key);
+            context = udp_socks5ctx_fork_find(&g_udp_fork_table, &fork_key);
             if (context) {
                 IF_VERBOSE {
                     LOGINF("[handle_udp_socket_msg] reuse fork context (RealIP): %s -> RealIP", ipstr);
@@ -387,7 +413,6 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
             del_context = udp_socks5ctx_add(&g_udp_socks5ctx_table, context);
         }
 
-
         if (del_context) {
             ev_invoke(evloop, &del_context->idle_timer, EV_CUSTOM);
         }
@@ -427,7 +452,8 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
         return;
     }
 
-    ev_timer_again(evloop, &context->idle_timer);
+    /* LRU touch + timer reset deferred to batch-end in udp_tproxy_recvmsg_cb */
+    *out_context = context;
 
     nrecv = send(context->udp_watcher.fd, header_start, actual_headerlen + nrecv, 0);
     if (nrecv < 0) {
@@ -437,6 +463,7 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
             if (errno == EPIPE || errno == ECONNRESET) {
                 LOGWAR("[handle_udp_socket_msg] fatal send error, releasing zombie context");
                 udp_socks5ctx_release(evloop, context);
+                *out_context = NULL;
             }
         }
         return;
@@ -813,6 +840,10 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, struct ev_watcher *w
     } batch_sends[UDP_BATCH_SIZE];
     int send_count = 0;
 
+    /* Track unique tproxy contexts for batch-end LRU touch */
+    udp_tproxyctx_t *tproxy_touched[UDP_BATCH_SIZE];
+    int tproxy_touched_count = 0;
+
     for (int i = 0; i < retval; i++) {
         char *buffer = g_udp_batch_buffer[i];
         ssize_t nrecv = msgs[i].msg_len;
@@ -865,8 +896,8 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, struct ev_watcher *w
             }
         }
 
-        /* Get or create tproxy context */
-        udp_tproxyctx_t *tproxyctx = udp_tproxyctx_get(&g_udp_tproxyctx_table, &fromipport);
+        /* Get or create tproxy context (FIND: no LRU bump, deferred to batch-end) */
+        udp_tproxyctx_t *tproxyctx = udp_tproxyctx_find(&g_udp_tproxyctx_table, &fromipport);
         if (!tproxyctx) {
             skaddr6_t fromskaddr = {0};
             if (dest_isipv4) {
@@ -902,8 +933,25 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, struct ev_watcher *w
             if (del_context) {
                 ev_invoke(evloop, &del_context->idle_timer, EV_CUSTOM);
             }
+            /* New entry is already at MRU end from _add; skip dedup to avoid redundant touch */
+            goto skip_tproxy_dedup;
         }
-        ev_timer_again(evloop, &tproxyctx->idle_timer);
+
+        /* Track unique tproxy contexts for batch-end touch (linear dedup) */
+        {
+            bool dup = false;
+            for (int j = 0; j < tproxy_touched_count; j++) {
+                if (tproxy_touched[j] == tproxyctx) {
+                    dup = true;
+                    break;
+                }
+            }
+            if (!dup && tproxy_touched_count < UDP_BATCH_SIZE) {
+                tproxy_touched[tproxy_touched_count++] = tproxyctx;
+            }
+        }
+
+skip_tproxy_dedup:
 
         /* Prepare destination address */
         ip_port_t *toipport = &socks5ctx->key_ipport;
@@ -1024,12 +1072,19 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, struct ev_watcher *w
 
     /* Optimization: Update LRU only once per batch */
     if (retval > 0) {
+        /* socks5ctx: single context per watcher */
         if (socks5ctx->is_forked) {
             udp_socks5ctx_touch_fork(&g_udp_fork_table, socks5ctx);
         } else {
             udp_socks5ctx_touch_main(&g_udp_socks5ctx_table, socks5ctx);
         }
         ev_timer_again(evloop, &socks5ctx->idle_timer);
+
+        /* tproxyctx: batch-end touch for each unique context */
+        for (int i = 0; i < tproxy_touched_count; i++) {
+            udp_tproxyctx_touch(&g_udp_tproxyctx_table, tproxy_touched[i]);
+            ev_timer_again(evloop, &tproxy_touched[i]->idle_timer);
+        }
     }
 }
 
