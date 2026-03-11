@@ -951,7 +951,7 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, struct ev_watcher *w
             }
         }
 
-skip_tproxy_dedup:
+skip_tproxy_dedup: ;
 
         /* Prepare destination address */
         ip_port_t *toipport = &socks5ctx->key_ipport;
