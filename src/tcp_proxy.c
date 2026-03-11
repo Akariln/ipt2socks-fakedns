@@ -23,14 +23,14 @@
 #endif
 
 /* Forward declarations */
-static void tcp_socks5_connect_cb(evloop_t *evloop, evio_t *watcher, int revents);
-static void tcp_socks5_send_authreq_cb(evloop_t *evloop, evio_t *watcher, int revents);
-static void tcp_socks5_recv_authresp_cb(evloop_t *evloop, evio_t *watcher, int revents);
-static void tcp_socks5_send_usrpwdreq_cb(evloop_t *evloop, evio_t *watcher, int revents);
-static void tcp_socks5_recv_usrpwdresp_cb(evloop_t *evloop, evio_t *watcher, int revents);
-static void tcp_socks5_send_proxyreq_cb(evloop_t *evloop, evio_t *watcher, int revents);
-static void tcp_socks5_recv_proxyresp_cb(evloop_t *evloop, evio_t *watcher, int revents);
-static void tcp_stream_payload_forward_cb(evloop_t *evloop, evio_t *watcher, int revents);
+static void tcp_socks5_connect_cb(evloop_t *evloop, struct ev_watcher *watcher, int revents);
+static void tcp_socks5_send_authreq_cb(evloop_t *evloop, struct ev_watcher *watcher, int revents);
+static void tcp_socks5_recv_authresp_cb(evloop_t *evloop, struct ev_watcher *watcher, int revents);
+static void tcp_socks5_send_usrpwdreq_cb(evloop_t *evloop, struct ev_watcher *watcher, int revents);
+static void tcp_socks5_recv_usrpwdresp_cb(evloop_t *evloop, struct ev_watcher *watcher, int revents);
+static void tcp_socks5_send_proxyreq_cb(evloop_t *evloop, struct ev_watcher *watcher, int revents);
+static void tcp_socks5_recv_proxyresp_cb(evloop_t *evloop, struct ev_watcher *watcher, int revents);
+static void tcp_stream_payload_forward_cb(evloop_t *evloop, struct ev_watcher *watcher, int revents);
 
 
 static inline tcp_context_t* get_tcpctx_by_watcher(evio_t *watcher) {
@@ -86,7 +86,8 @@ void tcp_proxy_close_all_sessions(evloop_t *evloop) {
     }
 }
 
-void tcp_tproxy_accept_cb(evloop_t *evloop, evio_t *accept_watcher, int revents __attribute__((unused))) {
+void tcp_tproxy_accept_cb(evloop_t *evloop, struct ev_watcher *watcher, int revents __attribute__((unused))) {
+    evio_t *accept_watcher = (evio_t *)watcher;
     bool isipv4 = (intptr_t)accept_watcher->data;
     skaddr6_t skaddr;
     char ipstr[IP6STRLEN];
@@ -178,28 +179,29 @@ void tcp_tproxy_accept_cb(evloop_t *evloop, evio_t *accept_watcher, int revents 
     context->client_watcher.data = context;
     context->socks5_watcher.data = context;
 
-    evio_t *watcher = &context->client_watcher;
-    ev_io_init(watcher, tcp_stream_payload_forward_cb, client_sockfd, EV_READ);
+    evio_t *io_watcher = &context->client_watcher;
+    ev_io_init(io_watcher, tcp_stream_payload_forward_cb, client_sockfd, EV_READ);
 
     /* build the ipv4/ipv6 proxy request (send to the socks5 proxy server) */
     size_t actual_len = 0;
     socks5_proxy_request_make(context->handshake.req, &skaddr, fake_domain, &actual_len);
     context->client_length = actual_len;
 
-    watcher = &context->socks5_watcher;
+    io_watcher = &context->socks5_watcher;
     if (tfo_nsend >= 0 && (size_t)tfo_nsend >= tfo_datalen) {
-        ev_io_init(watcher, tcp_socks5_recv_authresp_cb, socks5_sockfd, EV_READ);
+        ev_io_init(io_watcher, tcp_socks5_recv_authresp_cb, socks5_sockfd, EV_READ);
         tfo_nsend = 0; /* reset to zero for next send */
     } else {
-        ev_io_init(watcher, tfo_nsend >= 0 ? tcp_socks5_send_authreq_cb : tcp_socks5_connect_cb, socks5_sockfd, EV_WRITE);
+        ev_io_init(io_watcher, tfo_nsend >= 0 ? tcp_socks5_send_authreq_cb : tcp_socks5_connect_cb, socks5_sockfd, EV_WRITE);
         tfo_nsend = tfo_nsend >= 0 ? tfo_nsend : 0;
     }
-    ev_io_start(evloop, watcher);
+    ev_io_start(evloop, io_watcher);
 
     context->socks5_length = (size_t)tfo_nsend;
 }
 
-static void tcp_socks5_connect_cb(evloop_t *evloop, evio_t *socks5_watcher, int revents __attribute__((unused))) {
+static void tcp_socks5_connect_cb(evloop_t *evloop, struct ev_watcher *watcher, int revents __attribute__((unused))) {
+    evio_t *socks5_watcher = (evio_t *)watcher;
     if (tcp_has_error(socks5_watcher->fd)) {
         LOGERR("[tcp_socks5_connect_cb] connect to %s#%hu: %s", g_server_ipstr, g_server_portno, strerror(errno));
         tcp_context_release(evloop, get_tcpctx_by_watcher(socks5_watcher), true);
@@ -259,7 +261,8 @@ static int tcp_socks5_recv_response(const char *funcname, evloop_t *evloop, evio
     return 0;
 }
 
-static void tcp_socks5_send_authreq_cb(evloop_t *evloop, evio_t *socks5_watcher, int revents __attribute__((unused))) {
+static void tcp_socks5_send_authreq_cb(evloop_t *evloop, struct ev_watcher *watcher, int revents __attribute__((unused))) {
+    evio_t *socks5_watcher = (evio_t *)watcher;
     if (tcp_socks5_send_request("tcp_socks5_send_authreq_cb", evloop, socks5_watcher, &g_socks5_auth_request, sizeof(socks5_authreq_t)) != 1) {
         return;
     }
@@ -268,7 +271,8 @@ static void tcp_socks5_send_authreq_cb(evloop_t *evloop, evio_t *socks5_watcher,
     ev_io_start(evloop, socks5_watcher);
 }
 
-static void tcp_socks5_recv_authresp_cb(evloop_t *evloop, evio_t *socks5_watcher, int revents __attribute__((unused))) {
+static void tcp_socks5_recv_authresp_cb(evloop_t *evloop, struct ev_watcher *watcher, int revents __attribute__((unused))) {
+    evio_t *socks5_watcher = (evio_t *)watcher;
     tcp_context_t *context = get_tcpctx_by_watcher(socks5_watcher);
     if (tcp_socks5_recv_response("tcp_socks5_recv_authresp_cb", evloop, socks5_watcher, context->handshake.resp, sizeof(socks5_authresp_t)) != 1) {
         return;
@@ -292,7 +296,8 @@ static void tcp_socks5_recv_authresp_cb(evloop_t *evloop, evio_t *socks5_watcher
     }
 }
 
-static void tcp_socks5_send_usrpwdreq_cb(evloop_t *evloop, evio_t *socks5_watcher, int revents __attribute__((unused))) {
+static void tcp_socks5_send_usrpwdreq_cb(evloop_t *evloop, struct ev_watcher *watcher, int revents __attribute__((unused))) {
+    evio_t *socks5_watcher = (evio_t *)watcher;
     if (tcp_socks5_send_request("tcp_socks5_send_usrpwdreq_cb", evloop, socks5_watcher, &g_socks5_usrpwd_request, g_socks5_usrpwd_requestlen) != 1) {
         return;
     }
@@ -301,7 +306,8 @@ static void tcp_socks5_send_usrpwdreq_cb(evloop_t *evloop, evio_t *socks5_watche
     ev_io_start(evloop, socks5_watcher);
 }
 
-static void tcp_socks5_recv_usrpwdresp_cb(evloop_t *evloop, evio_t *socks5_watcher, int revents __attribute__((unused))) {
+static void tcp_socks5_recv_usrpwdresp_cb(evloop_t *evloop, struct ev_watcher *watcher, int revents __attribute__((unused))) {
+    evio_t *socks5_watcher = (evio_t *)watcher;
     tcp_context_t *context = get_tcpctx_by_watcher(socks5_watcher);
     if (tcp_socks5_recv_response("tcp_socks5_recv_usrpwdresp_cb", evloop, socks5_watcher, context->handshake.resp, sizeof(socks5_usrpwdresp_t)) != 1) {
         return;
@@ -321,7 +327,8 @@ static void tcp_socks5_recv_usrpwdresp_cb(evloop_t *evloop, evio_t *socks5_watch
     }
 }
 
-static void tcp_socks5_send_proxyreq_cb(evloop_t *evloop, evio_t *socks5_watcher, int revents __attribute__((unused))) {
+static void tcp_socks5_send_proxyreq_cb(evloop_t *evloop, struct ev_watcher *watcher, int revents __attribute__((unused))) {
+    evio_t *socks5_watcher = (evio_t *)watcher;
     tcp_context_t *context = get_tcpctx_by_watcher(socks5_watcher);
     if (tcp_socks5_send_request("tcp_socks5_send_proxyreq_cb", evloop, socks5_watcher, context->handshake.req, context->client_length) != 1) {
         return;
@@ -332,7 +339,8 @@ static void tcp_socks5_send_proxyreq_cb(evloop_t *evloop, evio_t *socks5_watcher
     context->client_length = 5; // Read first 5 bytes (VER, REP, RSV, ATYP, LEN/IP1)
 }
 
-static void tcp_socks5_recv_proxyresp_cb(evloop_t *evloop, evio_t *socks5_watcher, int revents __attribute__((unused))) {
+static void tcp_socks5_recv_proxyresp_cb(evloop_t *evloop, struct ev_watcher *watcher, int revents __attribute__((unused))) {
+    evio_t *socks5_watcher = (evio_t *)watcher;
     tcp_context_t *context = get_tcpctx_by_watcher(socks5_watcher);
     if (tcp_socks5_recv_response("tcp_socks5_recv_proxyresp_cb", evloop, socks5_watcher, context->handshake.resp, context->client_length) != 1) {
         return;
@@ -394,7 +402,8 @@ static void tcp_socks5_recv_proxyresp_cb(evloop_t *evloop, evio_t *socks5_watche
     LOGINF("[tcp_socks5_recv_proxyresp_cb] tunnel is ready, start forwarding ...");
 }
 
-static void tcp_stream_payload_forward_cb(evloop_t *evloop, evio_t *self_watcher, int revents) {
+static void tcp_stream_payload_forward_cb(evloop_t *evloop, struct ev_watcher *watcher, int revents) {
+    evio_t *self_watcher = (evio_t *)watcher;
     tcp_context_t *context = get_tcpctx_by_watcher(self_watcher);
     bool self_is_client = (self_watcher == &context->client_watcher);
     evio_t *peer_watcher = self_is_client ? &context->socks5_watcher : &context->client_watcher;

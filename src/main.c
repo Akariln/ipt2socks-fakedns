@@ -23,7 +23,7 @@
 #define IPT2SOCKS_VERSION "ipt2socks original <https://github.com/zfl9/ipt2socks>\nipt2socks-fakedns v2.0.8 <https://github.com/wyzhou-com/ipt2socks-fakedns>"
 
 static void* run_event_loop(void *arg);
-static void on_async_exit(evloop_t *loop, ev_async *watcher __attribute__((unused)), int revents __attribute__((unused)));
+static void on_async_exit(evloop_t *loop, struct ev_watcher *watcher __attribute__((unused)), int revents __attribute__((unused)));
 
 static void print_command_help(void) {
     printf("usage: ipt2socks <options...>. the existing options are as follows:\n"
@@ -153,7 +153,7 @@ static void parse_command_args(int argc, char* argv[]) {
         {"verbose",       no_argument,       NULL, 'v'},
         {"version",       no_argument,       NULL, 'V'},
         {"help",          no_argument,       NULL, 'h'},
-        {"enable-fakedns",no_argument,       NULL, 1001},
+        {"enable-fakedns", no_argument,       NULL, 1001},
         {"fakedns-addr",  required_argument, NULL, 1002},
         {"fakedns-port",  required_argument, NULL, 1003},
         {"fakedns-ip-range", required_argument, NULL, 1004},
@@ -488,9 +488,10 @@ THREAD_INIT_OK:
     return 0;
 }
 
-static void on_signal_read(evloop_t *loop, evio_t *watcher, int revents __attribute__((unused))) {
+static void on_signal_read(evloop_t *loop, struct ev_watcher *watcher, int revents __attribute__((unused))) {
+    evio_t *io_watcher = (evio_t *)watcher;
     struct signalfd_siginfo fdsi;
-    ssize_t s = read(watcher->fd, &fdsi, sizeof(struct signalfd_siginfo));
+    ssize_t s = read(io_watcher->fd, &fdsi, sizeof(struct signalfd_siginfo));
     if (s != sizeof(struct signalfd_siginfo)) {
         return;
     }
@@ -508,7 +509,7 @@ static void on_signal_read(evloop_t *loop, evio_t *watcher, int revents __attrib
 }
 
 // Async watcher callback for worker threads to receive exit notification
-static void on_async_exit(evloop_t *loop, ev_async *watcher __attribute__((unused)), int revents __attribute__((unused))) {
+static void on_async_exit(evloop_t *loop, struct ev_watcher *watcher __attribute__((unused)), int revents __attribute__((unused))) {
     ev_break(loop, EVBREAK_ALL);
 }
 
@@ -520,7 +521,7 @@ typedef struct {
     bool         is_tcp;
     const void  *bind_addr;
     socklen_t    bind_len;
-    void       (*callback)(evloop_t *, evio_t *, int);
+    void (*callback)(evloop_t *, struct ev_watcher *, int);
     const char  *tag;        /* for log messages */
 } listen_endpoint_t;
 

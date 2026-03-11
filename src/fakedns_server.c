@@ -16,7 +16,8 @@ typedef struct {
 
 static fakedns_packet_t g_fakedns_batch_packets[FAKEDNS_BATCH_SIZE];
 
-void fakedns_server_recv_cb(evloop_t *evloop, evio_t *watcher, int revents) {
+void fakedns_server_recv_cb(evloop_t *evloop, struct ev_watcher *watcher, int revents) {
+    evio_t *io_watcher = (evio_t *)watcher;
     (void)evloop;
     (void)revents;
 
@@ -37,7 +38,7 @@ void fakedns_server_recv_cb(evloop_t *evloop, evio_t *watcher, int revents) {
         msgs[i].msg_hdr.msg_flags = 0;
     }
 
-    int nrecv = recvmmsg(watcher->fd, msgs, FAKEDNS_BATCH_SIZE, MSG_DONTWAIT, NULL);
+    int nrecv = recvmmsg(io_watcher->fd, msgs, FAKEDNS_BATCH_SIZE, MSG_DONTWAIT, NULL);
     if (nrecv < 0) {
         if (errno != EAGAIN && errno != EWOULDBLOCK) {
             LOGERR("[fakedns_server_recv_cb] recvmmsg: %s", strerror(errno));
@@ -73,7 +74,7 @@ void fakedns_server_recv_cb(evloop_t *evloop, evio_t *watcher, int revents) {
     }
 
     if (send_count > 0) {
-        int sent = sendmmsg(watcher->fd, send_msgs, send_count, 0);
+        int sent = sendmmsg(io_watcher->fd, send_msgs, send_count, 0);
         if (sent < 0) {
             if (errno != EAGAIN && errno != EWOULDBLOCK) {
                 LOGERR("[fakedns_server_recv_cb] sendmmsg: %s", strerror(errno));

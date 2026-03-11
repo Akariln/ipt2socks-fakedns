@@ -14,21 +14,22 @@
 
 /* Forward declarations */
 static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, struct msghdr *msg, ssize_t nrecv, char *buffer);
-static void udp_socks5_connect_cb(evloop_t *evloop, evio_t *tcp_watcher, int revents);
-static void udp_socks5_send_authreq_cb(evloop_t *evloop, evio_t *watcher, int revents);
-static void udp_socks5_recv_authresp_cb(evloop_t *evloop, evio_t *watcher, int revents);
-static void udp_socks5_send_usrpwdreq_cb(evloop_t *evloop, evio_t *watcher, int revents);
-static void udp_socks5_recv_usrpwdresp_cb(evloop_t *evloop, evio_t *watcher, int revents);
-static void udp_socks5_send_proxyreq_cb(evloop_t *evloop, evio_t *watcher, int revents);
-static void udp_socks5_recv_proxyresp_cb(evloop_t *evloop, evio_t *watcher, int revents);
-static void udp_socks5_recv_tcpmessage_cb(evloop_t *evloop, evio_t *watcher, int revents);
-static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, evio_t *watcher, int revents);
+static void udp_socks5_connect_cb(evloop_t *evloop, struct ev_watcher *watcher, int revents);
+static void udp_socks5_send_authreq_cb(evloop_t *evloop, struct ev_watcher *watcher, int revents);
+static void udp_socks5_recv_authresp_cb(evloop_t *evloop, struct ev_watcher *watcher, int revents);
+static void udp_socks5_send_usrpwdreq_cb(evloop_t *evloop, struct ev_watcher *watcher, int revents);
+static void udp_socks5_recv_usrpwdresp_cb(evloop_t *evloop, struct ev_watcher *watcher, int revents);
+static void udp_socks5_send_proxyreq_cb(evloop_t *evloop, struct ev_watcher *watcher, int revents);
+static void udp_socks5_recv_proxyresp_cb(evloop_t *evloop, struct ev_watcher *watcher, int revents);
+static void udp_socks5_recv_tcpmessage_cb(evloop_t *evloop, struct ev_watcher *watcher, int revents);
+static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, struct ev_watcher *watcher, int revents);
 static inline void udp_socks5ctx_release(evloop_t *evloop, udp_socks5ctx_t *context);
-static void udp_socks5_context_timeout_cb(evloop_t *evloop, evtimer_t *idle_timer, int revents);
-static void udp_tproxy_context_timeout_cb(evloop_t *evloop, evtimer_t *idle_timer, int revents);
+static void udp_socks5_context_timeout_cb(evloop_t *evloop, struct ev_watcher *watcher, int revents);
+static void udp_tproxy_context_timeout_cb(evloop_t *evloop, struct ev_watcher *watcher, int revents);
 
 
-void udp_tproxy_recvmsg_cb(evloop_t *evloop, evio_t *tprecv_watcher, int revents __attribute__((unused))) {
+void udp_tproxy_recvmsg_cb(evloop_t *evloop, struct ev_watcher *watcher, int revents __attribute__((unused))) {
+    evio_t *tprecv_watcher = (evio_t *)watcher;
     bool isipv4 = (intptr_t)tprecv_watcher->data;
 
     /* Use maximum header size to allow building headers backward from payload */
@@ -459,7 +460,8 @@ static inline void udp_socks5ctx_release(evloop_t *evloop, udp_socks5ctx_t *cont
     ev_invoke(evloop, &context->idle_timer, EV_CUSTOM);
 }
 
-static void udp_socks5_connect_cb(evloop_t *evloop, evio_t *tcp_watcher, int revents __attribute__((unused))) {
+static void udp_socks5_connect_cb(evloop_t *evloop, struct ev_watcher *watcher, int revents __attribute__((unused))) {
+    evio_t *tcp_watcher = (evio_t *)watcher;
     if (tcp_has_error(tcp_watcher->fd)) {
         LOGERR("[udp_socks5_connect_cb] connect to %s#%hu: %s", g_server_ipstr, g_server_portno, strerror(errno));
         udp_socks5ctx_release(evloop, get_udpsk5ctx_by_tcp(tcp_watcher));
@@ -521,7 +523,8 @@ static int udp_socks5_recv_response(const char *funcname, evloop_t *evloop, evio
     return 0;
 }
 
-static void udp_socks5_send_authreq_cb(evloop_t *evloop, evio_t *tcp_watcher, int revents __attribute__((unused))) {
+static void udp_socks5_send_authreq_cb(evloop_t *evloop, struct ev_watcher *watcher, int revents __attribute__((unused))) {
+    evio_t *tcp_watcher = (evio_t *)watcher;
     if (udp_socks5_send_request("udp_socks5_send_authreq_cb", evloop, tcp_watcher, &g_socks5_auth_request, sizeof(socks5_authreq_t)) != 1) {
         return;
     }
@@ -530,7 +533,8 @@ static void udp_socks5_send_authreq_cb(evloop_t *evloop, evio_t *tcp_watcher, in
     ev_io_start(evloop, tcp_watcher);
 }
 
-static void udp_socks5_recv_authresp_cb(evloop_t *evloop, evio_t *tcp_watcher, int revents __attribute__((unused))) {
+static void udp_socks5_recv_authresp_cb(evloop_t *evloop, struct ev_watcher *watcher, int revents __attribute__((unused))) {
+    evio_t *tcp_watcher = (evio_t *)watcher;
     udp_socks5ctx_t *context = get_udpsk5ctx_by_tcp(tcp_watcher);
     if (udp_socks5_recv_response("udp_socks5_recv_authresp_cb", evloop, tcp_watcher, context->handshake.payload, sizeof(socks5_authresp_t)) != 1) {
         return;
@@ -559,7 +563,8 @@ static void udp_socks5_recv_authresp_cb(evloop_t *evloop, evio_t *tcp_watcher, i
     }
 }
 
-static void udp_socks5_send_usrpwdreq_cb(evloop_t *evloop, evio_t *tcp_watcher, int revents __attribute__((unused))) {
+static void udp_socks5_send_usrpwdreq_cb(evloop_t *evloop, struct ev_watcher *watcher, int revents __attribute__((unused))) {
+    evio_t *tcp_watcher = (evio_t *)watcher;
     if (udp_socks5_send_request("udp_socks5_send_usrpwdreq_cb", evloop, tcp_watcher, &g_socks5_usrpwd_request, g_socks5_usrpwd_requestlen) != 1) {
         return;
     }
@@ -568,7 +573,8 @@ static void udp_socks5_send_usrpwdreq_cb(evloop_t *evloop, evio_t *tcp_watcher, 
     ev_io_start(evloop, tcp_watcher);
 }
 
-static void udp_socks5_recv_usrpwdresp_cb(evloop_t *evloop, evio_t *tcp_watcher, int revents __attribute__((unused))) {
+static void udp_socks5_recv_usrpwdresp_cb(evloop_t *evloop, struct ev_watcher *watcher, int revents __attribute__((unused))) {
+    evio_t *tcp_watcher = (evio_t *)watcher;
     udp_socks5ctx_t *context = get_udpsk5ctx_by_tcp(tcp_watcher);
     if (udp_socks5_recv_response("udp_socks5_recv_usrpwdresp_cb", evloop, tcp_watcher, context->handshake.payload, sizeof(socks5_usrpwdresp_t)) != 1) {
         return;
@@ -590,7 +596,8 @@ static void udp_socks5_recv_usrpwdresp_cb(evloop_t *evloop, evio_t *tcp_watcher,
     }
 }
 
-static void udp_socks5_send_proxyreq_cb(evloop_t *evloop, evio_t *tcp_watcher, int revents __attribute__((unused))) {
+static void udp_socks5_send_proxyreq_cb(evloop_t *evloop, struct ev_watcher *watcher, int revents __attribute__((unused))) {
+    evio_t *tcp_watcher = (evio_t *)watcher;
     udp_socks5ctx_t *context = get_udpsk5ctx_by_tcp(tcp_watcher);
     bool isipv4 = context->dest_is_ipv4;
     const void *request = isipv4 ? (void *)&G_SOCKS5_UDP4_REQUEST : (void *)&G_SOCKS5_UDP6_REQUEST;
@@ -603,7 +610,8 @@ static void udp_socks5_send_proxyreq_cb(evloop_t *evloop, evio_t *tcp_watcher, i
     ev_io_start(evloop, tcp_watcher);
 }
 
-static void udp_socks5_recv_proxyresp_cb(evloop_t *evloop, evio_t *tcp_watcher, int revents __attribute__((unused))) {
+static void udp_socks5_recv_proxyresp_cb(evloop_t *evloop, struct ev_watcher *watcher, int revents __attribute__((unused))) {
+    evio_t *tcp_watcher = (evio_t *)watcher;
     udp_socks5ctx_t *context = get_udpsk5ctx_by_tcp(tcp_watcher);
     if (udp_socks5_recv_response("udp_socks5_recv_proxyresp_cb", evloop, tcp_watcher, context->handshake.payload, context->handshake.step_len) != 1) {
         return;
@@ -732,9 +740,9 @@ static void udp_socks5_recv_proxyresp_cb(evloop_t *evloop, evio_t *tcp_watcher, 
 
     ev_set_cb(tcp_watcher, udp_socks5_recv_tcpmessage_cb);
 
-    evio_t *watcher = &context->udp_watcher;
-    ev_io_init(watcher, udp_socks5_recv_udpmessage_cb, udp_sockfd, EV_READ);
-    ev_io_start(evloop, watcher);
+    evio_t *udp_watcher_ptr = &context->udp_watcher;
+    ev_io_init(udp_watcher_ptr, udp_socks5_recv_udpmessage_cb, udp_sockfd, EV_READ);
+    ev_io_start(evloop, udp_watcher_ptr);
 
     ev_timer_again(evloop, &context->idle_timer);
     if (context->is_forked) {
@@ -744,7 +752,8 @@ static void udp_socks5_recv_proxyresp_cb(evloop_t *evloop, evio_t *tcp_watcher, 
     }
 }
 
-static void udp_socks5_recv_tcpmessage_cb(evloop_t *evloop, evio_t *tcp_watcher, int revents __attribute__((unused))) {
+static void udp_socks5_recv_tcpmessage_cb(evloop_t *evloop, struct ev_watcher *watcher, int revents __attribute__((unused))) {
+    evio_t *tcp_watcher = (evio_t *)watcher;
     char dummy_buf; /* Uninitialized single-byte local stack variable */
 
     /* Pass stack address directly, avoiding implicit initialization and dynamic allocation overhead */
@@ -762,7 +771,8 @@ static void udp_socks5_recv_tcpmessage_cb(evloop_t *evloop, evio_t *tcp_watcher,
     }
 }
 
-static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, evio_t *udp_watcher, int revents __attribute__((unused))) {
+static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, struct ev_watcher *watcher, int revents __attribute__((unused))) {
+    evio_t *udp_watcher = (evio_t *)watcher;
     udp_socks5ctx_t *socks5ctx = (void *)((uint8_t *)udp_watcher - offsetof(udp_socks5ctx_t, udp_watcher));
 
     struct mmsghdr msgs[UDP_BATCH_SIZE];
@@ -937,7 +947,7 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, evio_t *udp_watcher,
             indices[k] = k;
         }
 
-        for (int i = 0; i < send_count; ) {
+        for (int i = 0; i < send_count;) {
             udp_tproxyctx_t *ctx = batch_sends[indices[i]].ctx;
             int group_start = i;
             int group_count = 0;
@@ -1023,7 +1033,8 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, evio_t *udp_watcher,
     }
 }
 
-static void udp_socks5_context_timeout_cb(evloop_t *evloop, evtimer_t *idle_timer, int revents) {
+static void udp_socks5_context_timeout_cb(evloop_t *evloop, struct ev_watcher *watcher, int revents) {
+    evtimer_t *idle_timer = (evtimer_t *)watcher;
     LOGINF("[udp_socks5_context_timeout_cb] context will be released, reason: %s", revents & EV_CUSTOM ? "manual" : "timeout");
 
     udp_socks5ctx_t *context = (void *)((uint8_t *)idle_timer - offsetof(udp_socks5ctx_t, idle_timer));
@@ -1055,7 +1066,8 @@ static void udp_socks5_context_timeout_cb(evloop_t *evloop, evtimer_t *idle_time
     mempool_free_sized(g_udp_context_pool, context, sizeof(*context));
 }
 
-static void udp_tproxy_context_timeout_cb(evloop_t *evloop, evtimer_t *idle_timer, int revents) {
+static void udp_tproxy_context_timeout_cb(evloop_t *evloop, struct ev_watcher *watcher, int revents) {
+    evtimer_t *idle_timer = (evtimer_t *)watcher;
     LOGINF("[udp_tproxy_context_timeout_cb] context will be released, reason: %s", revents & EV_CUSTOM ? "manual" : "timeout");
 
     udp_tproxyctx_t *context = (void *)((uint8_t *)idle_timer - offsetof(udp_tproxyctx_t, idle_timer));
@@ -1067,11 +1079,11 @@ static void udp_tproxy_context_timeout_cb(evloop_t *evloop, evtimer_t *idle_time
 }
 
 static void wrapper_socks5_timeout_cb(void *evloop_ctx, udp_socks5ctx_t *entry) {
-    udp_socks5_context_timeout_cb((evloop_t *)evloop_ctx, &entry->idle_timer, EV_CUSTOM);
+    udp_socks5_context_timeout_cb((evloop_t *)evloop_ctx, (struct ev_watcher *)&entry->idle_timer, EV_CUSTOM);
 }
 
 static void wrapper_tproxy_timeout_cb(void *evloop_ctx, udp_tproxyctx_t *entry) {
-    udp_tproxy_context_timeout_cb((evloop_t *)evloop_ctx, &entry->idle_timer, EV_CUSTOM);
+    udp_tproxy_context_timeout_cb((evloop_t *)evloop_ctx, (struct ev_watcher *)&entry->idle_timer, EV_CUSTOM);
 }
 
 void udp_proxy_close_all_sessions(evloop_t *evloop) {

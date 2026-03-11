@@ -126,18 +126,18 @@ typedef struct {
  * ════════════════════════════════════════════════════════════════════════ */
 
 /* add — returns the evicted (LRU) entry when over capacity, else NULL */
-udp_socks5ctx_t* udp_socks5ctx_add     (udp_socks5ctx_t **cache, udp_socks5ctx_t *entry);
+udp_socks5ctx_t* udp_socks5ctx_add(udp_socks5ctx_t **cache, udp_socks5ctx_t *entry);
 udp_socks5ctx_t* udp_socks5ctx_fork_add(udp_socks5ctx_t **cache, udp_socks5ctx_t *entry);
-udp_tproxyctx_t* udp_tproxyctx_add    (udp_tproxyctx_t **cache, udp_tproxyctx_t *entry);
+udp_tproxyctx_t* udp_tproxyctx_add(udp_tproxyctx_t **cache, udp_tproxyctx_t *entry);
 
 /* get — lookup + bump to MRU end; returns NULL on miss */
-udp_socks5ctx_t* udp_socks5ctx_get     (udp_socks5ctx_t **cache, const ip_port_t      *keyptr);
+udp_socks5ctx_t* udp_socks5ctx_get(udp_socks5ctx_t **cache, const ip_port_t      *keyptr);
 udp_socks5ctx_t* udp_socks5ctx_fork_get(udp_socks5ctx_t **cache, const udp_fork_key_t *keyptr);
-udp_tproxyctx_t* udp_tproxyctx_get    (udp_tproxyctx_t **cache, const ip_port_t      *keyptr);
+udp_tproxyctx_t* udp_tproxyctx_get(udp_tproxyctx_t **cache, const ip_port_t      *keyptr);
 
 /* del — unconditional removal */
-void udp_socks5ctx_del (udp_socks5ctx_t **cache, udp_socks5ctx_t *entry);
-void udp_tproxyctx_del (udp_tproxyctx_t **cache, udp_tproxyctx_t *entry);
+void udp_socks5ctx_del(udp_socks5ctx_t **cache, udp_socks5ctx_t *entry);
+void udp_tproxyctx_del(udp_tproxyctx_t **cache, udp_tproxyctx_t *entry);
 
 /*
  * touch — bump an existing entry to the MRU end.
@@ -157,13 +157,13 @@ typedef void (*udp_tproxyctx_cb_t)(void *ctx, udp_tproxyctx_t *entry);
 
 void udp_socks5ctx_clear_main(udp_socks5ctx_t **cache, udp_socks5ctx_cb_t cb, void *ctx);
 void udp_socks5ctx_clear_fork(udp_socks5ctx_t **cache, udp_socks5ctx_cb_t cb, void *ctx);
-void udp_tproxyctx_clear     (udp_tproxyctx_t **cache, udp_tproxyctx_cb_t cb, void *ctx);
+void udp_tproxyctx_clear(udp_tproxyctx_t **cache, udp_tproxyctx_cb_t cb, void *ctx);
 
 /* ════════════════════════════════════════════════════════════════════════
  * Event callbacks
  * ════════════════════════════════════════════════════════════════════════ */
 
-void udp_tproxy_recvmsg_cb  (evloop_t *evloop, evio_t *watcher, int revents);
+void udp_tproxy_recvmsg_cb(evloop_t *evloop, struct ev_watcher *watcher, int revents);
 void udp_proxy_close_all_sessions(evloop_t *evloop);
 
 #endif /* IPT2SOCKS_UDP_PROXY_H */
