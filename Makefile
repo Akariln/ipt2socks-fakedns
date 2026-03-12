@@ -1,70 +1,91 @@
 CC ?= gcc
 PREFIX ?= /usr/local
 BINDIR ?= $(PREFIX)/bin
-
-CFLAGS = -std=c99 -Wall -Wextra -Wvla -pthread -O3 -flto=auto \
-         -fno-strict-aliasing -ffunction-sections -fdata-sections \
-         -DNDEBUG -MMD -MP \
-         -I./uthash -I./xxhash \
-         $(EXTRA_CFLAGS)
-
-CFLAGS += -D_GNU_SOURCE
-
-LDFLAGS = -pthread -O3 -flto=auto -Wl,--gc-sections -s $(EXTRA_LDFLAGS)
-
-LDLIBS = -lm
+MAIN_NAME = ipt2socks
 
 SRCS = src/main.c src/ctx.c src/netutils.c src/socks5.c \
        src/fakedns.c src/fakedns_server.c \
        src/logutils.c src/mempool.c src/udp_proxy.c src/tcp_proxy.c \
        src/udp_lrucache.c
 
-OBJS = $(SRCS:.c=.o) xxhash/xxhash.o libev/ev.o
-DEPS = $(SRCS:.c=.d) xxhash/xxhash.d libev/ev.d
+BUILD_MODE := release
+CPPFLAGS := -D_GNU_SOURCE -DXXH_INLINE_ALL -MMD -MP -I./uthash -I./xxhash
+CFLAGS   := -std=c99 -Wall -Wextra -Wvla -pthread -fno-strict-aliasing \
+            -ffunction-sections -fdata-sections $(EXTRA_CFLAGS)
+LDFLAGS  := -pthread -Wl,--gc-sections $(EXTRA_LDFLAGS)
+LDLIBS   := -lm
 
-MAIN = ipt2socks
+ifeq ($(DEBUG), 1)
+    BUILD_MODE = debug
+    CPPFLAGS  += -DENABLE_SENDTO_LOG -DFAKEDNS_MRU_STATS
+    CFLAGS    += -O0 -g -fsanitize=address,undefined
+    LDFLAGS   += -g -fsanitize=address,undefined
+else
+    CPPFLAGS  += -DNDEBUG
+    CFLAGS    += -O3 -flto=auto
+    LDFLAGS   += -O3 -flto=auto
+endif
 
-.PHONY: all install clean static musl-static debug
+ifeq ($(STATIC), 1)
+    BUILD_MODE := $(BUILD_MODE)-static
+    LDFLAGS    += -static
+endif
+
+ifneq ($(DEBUG), 1)
+    LDFLAGS += -s
+endif
+
+BUILD_DIR := build/$(BUILD_MODE)
+
+MAIN = $(BUILD_DIR)/$(MAIN_NAME)
+OBJS = $(patsubst %.c,$(BUILD_DIR)/%.o,$(SRCS)) $(BUILD_DIR)/libev/ev.o
+DEPS = $(OBJS:.o=.d)
+
+.PHONY: all install uninstall clean help
 
 all: $(MAIN)
 
+help:
+	@echo "Usage: make [TARGET] [OPTIONS]"
+	@echo ""
+	@echo "Targets:"
+	@echo "  all        Build $(MAIN_NAME) (default)"
+	@echo "  install    Install $(MAIN_NAME) to \$$(DESTDIR)\$$(BINDIR) (default: $(BINDIR))"
+	@echo "  uninstall  Remove $(MAIN_NAME) from \$$(DESTDIR)\$$(BINDIR)"
+	@echo "  clean      Remove all build artifacts (build/)"
+	@echo "  help       Show this help message"
+	@echo ""
+	@echo "Options:"
+	@echo "  DEBUG=1    Build with debug symbols and sanitizers (default: 0)"
+	@echo "  STATIC=1   Link statically (default: 0)"
+	@echo "  CC=...     C compiler to use (default: gcc)"
+	@echo "  PREFIX=... Installation prefix (default: /usr/local)"
+	@echo ""
+	@echo "Examples:"
+	@echo "  make"
+	@echo "  make DEBUG=1"
+	@echo "  make STATIC=1"
+	@echo "  make install PREFIX=/usr"
+
 $(MAIN): $(OBJS)
-	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
-%.o: %.c
-	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD_DIR)/src/%.o: src/%.c
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
-libev/ev.o: libev/ev.c
-	$(CC) $(CFLAGS) -fno-sanitize=undefined -include src/libev_config.h -w -c $< -o $@
+$(BUILD_DIR)/libev/ev.o: libev/ev.c
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -fno-sanitize=undefined -include src/libev_config.h -w -c $< -o $@
 
-xxhash/xxhash.o: xxhash/xxhash.c
-	$(CC) $(CFLAGS) -c $< -o $@
+install: all
+	install -d $(DESTDIR)$(BINDIR)
+	install -m 755 $(MAIN) $(DESTDIR)$(BINDIR)/$(MAIN_NAME)
 
-install: $(MAIN)
-	mkdir -p $(DESTDIR)$(BINDIR)
-	cp -f $(MAIN) $(DESTDIR)$(BINDIR)/$(MAIN)
-	chmod 755 $(DESTDIR)$(BINDIR)/$(MAIN)
+uninstall:
+	rm -f $(DESTDIR)$(BINDIR)/$(MAIN_NAME)
 
 clean:
-	rm -f $(MAIN) $(OBJS) $(DEPS)
-
-static:
-	$(MAKE) clean
-	$(MAKE) LDFLAGS="-pthread -O3 -flto=auto -Wl,--gc-sections -s -static $(EXTRA_LDFLAGS)" \
-		all
-
-musl-static:
-	$(MAKE) clean
-	$(MAKE) CC=musl-gcc \
-		LDFLAGS="-pthread -O3 -flto=auto -Wl,--gc-sections -s -static $(EXTRA_LDFLAGS)" \
-		all
-
-debug:
-	$(MAKE) clean
-	$(MAKE) CFLAGS="-std=c99 -Wall -Wextra -Wvla -pthread -O0 -g \
-		-fno-strict-aliasing -MMD -MP -DENABLE_SENDTO_LOG -DFAKEDNS_MRU_STATS \
-		-D_GNU_SOURCE -I./uthash -I./xxhash -fsanitize=address,undefined $(EXTRA_CFLAGS)" \
-		LDFLAGS="-pthread -g -fsanitize=address,undefined $(EXTRA_LDFLAGS)" \
-		all
+	rm -rf build
 
 -include $(DEPS)
