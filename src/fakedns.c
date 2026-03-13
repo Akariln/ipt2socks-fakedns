@@ -717,7 +717,7 @@ static const uint32_t FAKEDNS_MAGIC = 0x464E5344; // "DNSF" Little Endian -> "FN
 static const uint32_t FAKEDNS_VERSION = 3;
 
 void fakedns_save(const char *path) {
-    if (!path || !g_fakedns_pool) {
+    if (!path || !g_fakedns_pool || !g_pool_used) {
         return;
     }
 
@@ -850,6 +850,11 @@ void fakedns_load(const char *path) {
 
     if (strcmp(file_cidr, g_cidr_str) != 0) {
         LOGERR("[fakedns_load] CIDR mismatch. File: %s, Current: %s. Ignoring saved data.", file_cidr, g_cidr_str);
+        fclose(fp);
+        return;
+    }
+
+    if (count == 0) {
         fclose(fp);
         return;
     }
