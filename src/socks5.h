@@ -97,6 +97,14 @@ typedef struct {
     /* portno_t portnum; // follows domain_str */
 } __attribute__((packed)) socks5_domainreq_t;
 
+/* socks5 proxy response header (common prefix for ipv4/ipv6 responses) */
+typedef struct {
+    uint8_t version;
+    uint8_t respcode;
+    uint8_t reserved; /* 0x00 */
+    uint8_t addrtype;
+} __attribute__((packed)) socks5_resp_header_t;
+
 /* socks5 ipv4-proxy response */
 typedef struct {
     uint8_t   version;
@@ -159,6 +167,6 @@ void socks5_proxy_request_make(void *request, const void *skaddr, const char *do
 
 bool socks5_auth_response_check(const char *funcname, const socks5_authresp_t *response);
 bool socks5_usrpwd_response_check(const char *funcname, const socks5_usrpwdresp_t *response);
-bool socks5_proxy_response_check(const char *funcname, const socks5_ipv4resp_t *response);
+bool socks5_proxy_response_check(const char *funcname, const socks5_resp_header_t *response);
 
 #endif

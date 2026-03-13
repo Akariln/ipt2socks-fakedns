@@ -645,7 +645,7 @@ static void udp_socks5_recv_proxyresp_cb(evloop_t *evloop, struct ev_watcher *wa
     }
     /* If we just read the first 5 bytes (Header prefix) */
     if (context->handshake.step_len == 5) {
-        uint8_t atype = ((socks5_ipv4resp_t *)context->handshake.payload)->addrtype;
+        uint8_t atype = ((socks5_resp_header_t *)context->handshake.payload)->addrtype;
         size_t total_len;
 
         if (atype == SOCKS5_ADDRTYPE_IPV4) {
@@ -676,13 +676,13 @@ static void udp_socks5_recv_proxyresp_cb(evloop_t *evloop, struct ev_watcher *wa
         }
     }
 
-    if (!socks5_proxy_response_check("udp_socks5_recv_proxyresp_cb", (const socks5_ipv4resp_t *)context->handshake.payload)) {
+    if (!socks5_proxy_response_check("udp_socks5_recv_proxyresp_cb", (const socks5_resp_header_t *)context->handshake.payload)) {
         udp_socks5ctx_release(evloop, context);
         return;
     }
 
     portno_t relay_port;
-    uint8_t atype = ((socks5_ipv4resp_t *)context->handshake.payload)->addrtype;
+    uint8_t atype = ((socks5_resp_header_t *)context->handshake.payload)->addrtype;
     if (atype == SOCKS5_ADDRTYPE_IPV4) {
         relay_port = ((socks5_ipv4resp_t *)context->handshake.payload)->portnum;
     } else if (atype == SOCKS5_ADDRTYPE_IPV6) {
@@ -951,7 +951,8 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, struct ev_watcher *w
             }
         }
 
-skip_tproxy_dedup: ;
+skip_tproxy_dedup:
+        ;
 
         /* Prepare destination address */
         ip_port_t *toipport = &socks5ctx->key_ipport;

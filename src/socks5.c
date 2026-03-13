@@ -37,18 +37,19 @@ void socks5_usrpwd_request_make(const char *username, const char *password) {
     socks5_usrpwdreq_t *usrpwdreq = (void *)g_socks5_usrpwd_request;
     usrpwdreq->version = SOCKS5_USRPWD_VERSION;
 
-    uint8_t *usrlenptr = (void *)usrpwdreq + 1;
+    uint8_t *usrlenptr = (uint8_t *)usrpwdreq + 1;
     *usrlenptr = strlen(username);
 
-    char *usrbufptr = (void *)usrlenptr + 1;
+    uint8_t *usrbufptr = usrlenptr + 1;
     memcpy(usrbufptr, username, *usrlenptr);
 
-    uint8_t *pwdlenptr = (void *)usrbufptr + *usrlenptr;
+    uint8_t *pwdlenptr = usrbufptr + *usrlenptr;
     *pwdlenptr = strlen(password);
 
-    char *pwdbufptr = (void *)pwdlenptr + 1;
+    uint8_t *pwdbufptr = pwdlenptr + 1;
     memcpy(pwdbufptr, password, *pwdlenptr);
 
+    /* version(1) + usrlen(1) + username + pwdlen(1) + password */
     g_socks5_usrpwd_requestlen = 1 + 1 + *usrlenptr + 1 + *pwdlenptr;
 }
 
@@ -70,10 +71,10 @@ void socks5_proxy_request_make(void *request, const void *skaddr, const char *do
         } else {
             port = ((skaddr6_t *)skaddr)->sin6_port;
         }
-        memcpy(dreq->domain_str + dreq->domain_len, &port, 2);
+        memcpy(dreq->domain_str + dreq->domain_len, &port, sizeof(portno_t));
 
         if (reqlen) {
-            *reqlen = sizeof(socks5_domainreq_t) + dreq->domain_len + 2;
+            *reqlen = sizeof(socks5_domainreq_t) + dreq->domain_len + sizeof(portno_t);
         }
     } else if (((skaddr4_t *)skaddr)->sin_family == AF_INET) {
         const skaddr4_t *addr = skaddr;
@@ -143,7 +144,7 @@ bool socks5_usrpwd_response_check(const char *funcname, const socks5_usrpwdresp_
     return true;
 }
 
-bool socks5_proxy_response_check(const char *funcname, const socks5_ipv4resp_t *response) {
+bool socks5_proxy_response_check(const char *funcname, const socks5_resp_header_t *response) {
     if (response->version != SOCKS5_VERSION) {
         LOGERR("[%s] response.version:%#hhx != %#x", funcname, response->version, SOCKS5_VERSION);
         return false;
