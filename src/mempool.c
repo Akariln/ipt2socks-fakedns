@@ -125,7 +125,7 @@ memory_pool_t* mempool_create(size_t block_size, size_t initial_blocks, size_t m
 
     pool->block_size = block_size;
     /* Align total size to cache line */
-    pool->total_size = (block_size + CACHELINE_SIZE - 1) & ~(CACHELINE_SIZE - 1);
+    pool->total_size = (block_size + (size_t)CACHELINE_SIZE - 1) & ~((size_t)CACHELINE_SIZE - 1);
     pool->max_blocks = (max_blocks == 0) ? SIZE_MAX : max_blocks;
 
     /* Pre-allocate initial blocks */

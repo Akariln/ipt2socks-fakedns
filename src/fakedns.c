@@ -61,8 +61,8 @@ static const uint32_t FAKEDNS_TTL = 43200; // 12 hours
 #define FAKEDNS_TTL_REFRESH_THRESHOLD (int32_t)(FAKEDNS_TTL * 3 / 10)
 
 // Pool usage warning thresholds
-#define FAKEDNS_POOL_WARN_THRESHOLD   0.80F  // 80% usage warning
-#define FAKEDNS_POOL_CRITICAL_THRESHOLD 0.95F  // 95% usage critical
+#define FAKEDNS_POOL_WARN_THRESHOLD   0.80f  // 80% usage warning
+#define FAKEDNS_POOL_CRITICAL_THRESHOLD 0.95f  // 95% usage critical
 static uint32_t g_max_probes = 0;
 
 void fakedns_init(const char *cidr_str) {
@@ -120,12 +120,12 @@ void fakedns_init(const char *cidr_str) {
     LOG_ALWAYS_INF("[fakedns_init] IP range: %s/%ld", ip_str, prefix_len);
     LOG_ALWAYS_INF("[fakedns_init] Pool size: %u addresses (array: %.1f KB, max data: %.1f KB)",
                    g_pool_size,
-                   (float)(g_pool_size * sizeof(fakedns_entry_t *)) / 1024.0F,
-                   (float)(g_pool_size * sizeof(fakedns_entry_t)) / 1024.0F);
+                   (float)(g_pool_size * sizeof(fakedns_entry_t *)) / 1024.0f,
+                   (float)(g_pool_size * sizeof(fakedns_entry_t)) / 1024.0f);
     LOG_ALWAYS_INF("[fakedns_init] High usage threshold: %.0f%% (%u entries)",
-                   FAKEDNS_POOL_WARN_THRESHOLD * 100.0F, (uint32_t)(g_pool_size * FAKEDNS_POOL_WARN_THRESHOLD));
+                   (double)(FAKEDNS_POOL_WARN_THRESHOLD * 100.0f), (uint32_t)((float)g_pool_size * FAKEDNS_POOL_WARN_THRESHOLD));
     LOG_ALWAYS_INF("[fakedns_init] Critically high usage threshold: %.0f%% (%u entries)",
-                   FAKEDNS_POOL_CRITICAL_THRESHOLD * 100.0F, (uint32_t)(g_pool_size * FAKEDNS_POOL_CRITICAL_THRESHOLD));
+                   (double)(FAKEDNS_POOL_CRITICAL_THRESHOLD * 100.0f), (uint32_t)((float)g_pool_size * FAKEDNS_POOL_CRITICAL_THRESHOLD));
     LOG_ALWAYS_INF("[fakedns_init] Max probe steps: %u", g_max_probes);
 }
 
@@ -238,7 +238,7 @@ static uint32_t fakedns_lookup_domain(const char *domain, size_t len) {
                 uint32_t warn_step = g_pool_size / 50;
 
                 if (g_pool_used - g_last_warn_used >= warn_step) {
-                    LOGERR("[fakedns] CRITICAL: pool usage is critically high: %.1f%% (%u/%u)", usage * 100.0F, g_pool_used, g_pool_size);
+                    LOGERR("[fakedns] CRITICAL: pool usage is critically high: %.1f%% (%u/%u)", usage * 100.0f, g_pool_used, g_pool_size);
                     g_last_warn_used = g_pool_used;
                 }
             } else if (usage >= FAKEDNS_POOL_WARN_THRESHOLD) {
@@ -246,7 +246,7 @@ static uint32_t fakedns_lookup_domain(const char *domain, size_t len) {
                 uint32_t warn_step = g_pool_size / 20;
 
                 if (g_pool_used - g_last_warn_used >= warn_step) {
-                    LOGWAR("[fakedns] WARNING: pool usage is high: %.1f%% (%u/%u)", usage * 100.0F, g_pool_used, g_pool_size);
+                    LOGWAR("[fakedns] WARNING: pool usage is high: %.1f%% (%u/%u)", usage * 100.0f, g_pool_used, g_pool_size);
                     g_last_warn_used = g_pool_used;
                 }
             }
@@ -347,7 +347,7 @@ bool fakedns_reverse_lookup(uint32_t ip, char *buffer, size_t buf_len) {
             // Move-to-Front: promote found item to index 0
             if (i > 0) {
                 // Shift [0..i-1] pointers to [1..i]
-                memmove(&g_fakedns_mru_ptrs[1], &g_fakedns_mru_ptrs[0], i * sizeof(fakedns_mru_entry_t *));
+                memmove(&g_fakedns_mru_ptrs[1], &g_fakedns_mru_ptrs[0], (size_t)i * sizeof(fakedns_mru_entry_t *));
                 g_fakedns_mru_ptrs[0] = mru_item;
             }
 
@@ -360,7 +360,7 @@ bool fakedns_reverse_lookup(uint32_t ip, char *buffer, size_t buf_len) {
                     g_mru_last_stat_time = now_stat;
                 } else if (now_stat - g_mru_last_stat_time >= 1800) {
                     uint64_t total = g_mru_hits + g_mru_misses;
-                    float hp = (float)g_mru_hits / total * 100.0f;
+                    float hp = (float)g_mru_hits / (float)total * 100.0f;
                     LOG_ALWAYS_INF("[fakedns_score] Thread %p | Hits: %llu, Misses: %llu, WinRate: %.2f%%",
                                    (void*)pthread_self(), (unsigned long long)g_mru_hits, (unsigned long long)g_mru_misses, hp);
                     g_mru_hits = 0;
@@ -516,9 +516,9 @@ size_t fakedns_process_query(const uint8_t *query, size_t qlen, uint8_t *buffer,
 
     // Header parsing
     // ID (2), Flags (2), QDCOUNT (2), ANCOUNT (2), NSCOUNT (2), ARCOUNT (2)
-    //uint16_t id = (query[0] << 8) | query[1];
-    uint16_t flags = (query[2] << 8) | query[3];
-    uint16_t qdcount = (query[4] << 8) | query[5];
+    //uint16_t id = (uint16_t)((query[0] << 8) | query[1]);
+    uint16_t flags = (uint16_t)((query[2] << 8) | query[3]);
+    uint16_t qdcount = (uint16_t)((query[4] << 8) | query[5]);
 
     // Valid query checks: QR=0, Opcode=0, QDCOUNT=1
     if ((flags & 0xF800) != 0 || qdcount != 1) {
@@ -575,8 +575,8 @@ size_t fakedns_process_query(const uint8_t *query, size_t qlen, uint8_t *buffer,
         return 0; // Malformed
     }
 
-    uint16_t qtype = (query[offset] << 8) | query[offset + 1];
-    uint16_t qclass = (query[offset + 2] << 8) | query[offset + 3];
+    uint16_t qtype = (uint16_t)((query[offset] << 8) | query[offset + 1]);
+    uint16_t qclass = (uint16_t)((query[offset + 2] << 8) | query[offset + 3]);
 
     // We only answer IN class (1)
     if (qclass != 1) {
@@ -590,8 +590,8 @@ size_t fakedns_process_query(const uint8_t *query, size_t qlen, uint8_t *buffer,
             memcpy(buffer, query, offset + 4);
         }
 
-        buffer[2] = (resp_flags >> 8) & 0xFF;
-        buffer[3] = resp_flags & 0xFF;
+        buffer[2] = (uint8_t)((resp_flags >> 8) & 0xFF);
+        buffer[3] = (uint8_t)(resp_flags & 0xFF);
         buffer[6] = 0;
         buffer[7] = 0; // ANCOUNT = 0
         buffer[8] = 0;
@@ -612,8 +612,8 @@ size_t fakedns_process_query(const uint8_t *query, size_t qlen, uint8_t *buffer,
     }
 
     // Update Header
-    buffer[2] = (resp_flags >> 8) & 0xFF;
-    buffer[3] = resp_flags & 0xFF;
+    buffer[2] = (uint8_t)((resp_flags >> 8) & 0xFF);
+    buffer[3] = (uint8_t)(resp_flags & 0xFF);
     // ANCOUNT, NSCOUNT, ARCOUNT = 0 by default
     buffer[6] = 0;
     buffer[7] = 0;
@@ -747,7 +747,7 @@ void fakedns_save(const char *path) {
     }
 
     // Version 3: Write CIDR
-    uint16_t cidr_len = strlen(g_cidr_str);
+    uint16_t cidr_len = (uint16_t)strlen(g_cidr_str);
     if (fwrite(&cidr_len, 2, 1, fp) != 1 ||
             fwrite(g_cidr_str, 1, cidr_len, fp) != cidr_len) {
         LOGERR("[fakedns_save] failed to write CIDR to %s", tmp_path);
@@ -762,7 +762,7 @@ void fakedns_save(const char *path) {
     for (uint32_t i = 0; i < g_pool_size; ++i) {
         fakedns_entry_t *entry = g_fakedns_pool[i];
         if (entry) {
-            uint16_t dlen = strlen(entry->domain);
+            uint16_t dlen = (uint16_t)strlen(entry->domain);
             if (fwrite(&entry->ip, 4, 1, fp) != 1 ||
                     fwrite(&dlen, 2, 1, fp) != 1 ||
                     fwrite(entry->domain, 1, dlen, fp) != dlen) {

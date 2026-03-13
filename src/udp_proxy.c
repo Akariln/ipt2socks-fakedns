@@ -13,7 +13,7 @@
 #include "socks5.h"
 
 /* Forward declarations */
-static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, struct msghdr *msg, ssize_t nrecv, char *buffer, udp_socks5ctx_t **out_context);
+static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, struct msghdr *msg, size_t nrecv, char *buffer, udp_socks5ctx_t **out_context);
 static void udp_socks5_connect_cb(evloop_t *evloop, struct ev_watcher *watcher, int revents);
 static void udp_socks5_send_authreq_cb(evloop_t *evloop, struct ev_watcher *watcher, int revents);
 static void udp_socks5_recv_authresp_cb(evloop_t *evloop, struct ev_watcher *watcher, int revents);
@@ -74,7 +74,7 @@ void udp_tproxy_recvmsg_cb(evloop_t *evloop, struct ev_watcher *watcher, int rev
 
     for (int i = 0; i < retval; i++) {
         udp_socks5ctx_t *ctx = NULL;
-        handle_udp_socket_msg(evloop, tprecv_watcher, &msgs[i].msg_hdr, msgs[i].msg_len, g_udp_batch_buffer[i], &ctx);
+        handle_udp_socket_msg(evloop, tprecv_watcher, &msgs[i].msg_hdr, (size_t)msgs[i].msg_len, g_udp_batch_buffer[i], &ctx);
         if (ctx) {
             /* Linear dedup — UDP_BATCH_SIZE is small (16) */
             bool dup = false;
@@ -151,7 +151,7 @@ static char *build_socks5_udp_header(char *payload_start, const char *fake_domai
     return header_start;
 }
 
-static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, struct msghdr *msg, ssize_t nrecv, char *buffer, udp_socks5ctx_t **out_context) {
+static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, struct msghdr *msg, size_t nrecv, char *buffer, udp_socks5ctx_t **out_context) {
     *out_context = NULL;
     bool isipv4 = (intptr_t)tprecv_watcher->data;
     skaddr6_t skaddr;
@@ -312,7 +312,7 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
     if (!context) {
         int tcp_sockfd = new_tcp_connect_sockfd(g_server_skaddr.sin6_family, g_tcp_syncnt_max);
         const void *tfo_data = (g_options & OPT_ENABLE_TFO_CONNECT) ? &g_socks5_auth_request : NULL;
-        uint16_t tfo_datalen = (g_options & OPT_ENABLE_TFO_CONNECT) ? sizeof(socks5_authreq_t) : 0;
+        size_t tfo_datalen = (g_options & OPT_ENABLE_TFO_CONNECT) ? sizeof(socks5_authreq_t) : 0;
         ssize_t tfo_nsend = -1; /* if tfo connect succeed: tfo_nsend >= 0 */
 
         if (!tcp_connect(tcp_sockfd, &g_server_skaddr, tfo_data, tfo_datalen, &tfo_nsend)) {
@@ -354,7 +354,7 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
             tfo_nsend = tfo_nsend >= 0 ? tfo_nsend : 0;
         }
         ev_io_start(evloop, watcher);
-        context->handshake.nbytes = tfo_nsend >= 0 ? tfo_nsend : 0; /* nsend or nrecv */
+        context->handshake.nbytes = (uint16_t)tfo_nsend; /* nsend or nrecv */
 
         /* tunnel not ready if udp_watcher->data != NULL */
         size_t node_size = sizeof(udp_packet_node_t) + actual_headerlen + nrecv;
@@ -455,8 +455,8 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
     /* LRU touch + timer reset deferred to batch-end in udp_tproxy_recvmsg_cb */
     *out_context = context;
 
-    nrecv = send(context->udp_watcher.fd, header_start, actual_headerlen + nrecv, 0);
-    if (nrecv < 0) {
+    ssize_t nsend = send(context->udp_watcher.fd, header_start, actual_headerlen + nrecv, 0);
+    if (nsend < 0) {
         if (errno != EAGAIN && errno != EWOULDBLOCK) {
             parse_socket_addr(&skaddr, ipstr, &portno);
             LOGERR("[handle_udp_socket_msg] send to %s#%hu: %s", ipstr, portno, strerror(errno));
@@ -471,10 +471,10 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
     IF_VERBOSE {
         if (fake_domain) {
             portno = ntohs(((skaddr4_t *)&skaddr)->sin_port);
-            LOGINF("[handle_udp_socket_msg] send to %s#%hu, nsend:%zd", fake_domain, portno, nrecv);
+            LOGINF("[handle_udp_socket_msg] send to %s#%hu, nsend:%zd", fake_domain, portno, nsend);
         } else {
             parse_socket_addr(&skaddr, ipstr, &portno);
-            LOGINF("[handle_udp_socket_msg] send to %s#%hu, nsend:%zd", ipstr, portno, nrecv);
+            LOGINF("[handle_udp_socket_msg] send to %s#%hu, nsend:%zd", ipstr, portno, nsend);
         }
     }
 }
@@ -514,7 +514,7 @@ static int udp_socks5_send_request(const char *funcname, evloop_t *evloop, evio_
         return 0;
     }
     LOGINF("[%s] send to %s#%hu, nsend:%zd", funcname, g_server_ipstr, g_server_portno, n);
-    *nsend += (size_t)n;
+    *nsend += (uint16_t)n;
     if (*nsend >= datalen) {
         *nsend = 0;
         return 1;
@@ -542,7 +542,7 @@ static int udp_socks5_recv_response(const char *funcname, evloop_t *evloop, evio
         return -1;
     }
     LOGINF("[%s] recv from %s#%hu, nrecv:%zd", funcname, g_server_ipstr, g_server_portno, n);
-    *nrecv += (size_t)n;
+    *nrecv += (uint16_t)n;
     if (*nrecv >= datalen) {
         *nrecv = 0;
         return 1;
@@ -571,7 +571,7 @@ static void udp_socks5_recv_authresp_cb(evloop_t *evloop, struct ev_watcher *wat
         return;
     }
     const void *data;
-    uint16_t datalen;
+    size_t datalen;
     if (g_socks5_usrpwd_requestlen) {
         data = &g_socks5_usrpwd_request;
         datalen = g_socks5_usrpwd_requestlen;
@@ -612,7 +612,7 @@ static void udp_socks5_recv_usrpwdresp_cb(evloop_t *evloop, struct ev_watcher *w
     }
     bool isipv4 = context->dest_is_ipv4;
     const void *data = isipv4 ? (void *)&G_SOCKS5_UDP4_REQUEST : (void *)&G_SOCKS5_UDP6_REQUEST;
-    uint16_t datalen = isipv4 ? sizeof(socks5_ipv4req_t) : sizeof(socks5_ipv6req_t);
+    size_t datalen = isipv4 ? sizeof(socks5_ipv4req_t) : sizeof(socks5_ipv6req_t);
     int ret = udp_socks5_send_request("udp_socks5_recv_usrpwdresp_cb", evloop, tcp_watcher, data, datalen);
     if (ret == 1) {
         ev_set_cb(tcp_watcher, udp_socks5_recv_proxyresp_cb);
@@ -628,7 +628,7 @@ static void udp_socks5_send_proxyreq_cb(evloop_t *evloop, struct ev_watcher *wat
     udp_socks5ctx_t *context = get_udpsk5ctx_by_tcp(tcp_watcher);
     bool isipv4 = context->dest_is_ipv4;
     const void *request = isipv4 ? (void *)&G_SOCKS5_UDP4_REQUEST : (void *)&G_SOCKS5_UDP6_REQUEST;
-    uint16_t requestlen = isipv4 ? sizeof(socks5_ipv4req_t) : sizeof(socks5_ipv6req_t);
+    size_t requestlen = isipv4 ? sizeof(socks5_ipv4req_t) : sizeof(socks5_ipv6req_t);
     if (udp_socks5_send_request("udp_socks5_send_proxyreq_cb", evloop, tcp_watcher, request, requestlen) != 1) {
         return;
     }
@@ -664,15 +664,13 @@ static void udp_socks5_recv_proxyresp_cb(evloop_t *evloop, struct ev_watcher *wa
             return;
         }
 
-        if (total_len > 5) {
-            /* Update length targets */
-            context->handshake.step_len = total_len;
-            context->handshake.nbytes = 5; /* We already have 5 bytes */
+        /* Update length targets */
+        context->handshake.step_len = (uint16_t)total_len;
+        context->handshake.nbytes = 5; /* We already have 5 bytes */
 
-            /* Attempt to read the rest immediately */
-            if (udp_socks5_recv_response("udp_socks5_recv_proxyresp_cb", evloop, tcp_watcher, context->handshake.payload, total_len) != 1) {
-                return;
-            }
+        /* Attempt to read the rest immediately */
+        if (udp_socks5_recv_response("udp_socks5_recv_proxyresp_cb", evloop, tcp_watcher, context->handshake.payload, total_len) != 1) {
+            return;
         }
     }
 
@@ -727,31 +725,30 @@ static void udp_socks5_recv_proxyresp_cb(evloop_t *evloop, struct ev_watcher *wa
     while (curr) {
         ssize_t nsend = send(udp_sockfd, curr->data, curr->len, 0);
         if (nsend < 0 || unlikely(g_verbose)) {
-            char ipstr[260];
+            char log_addr[256];
             portno_t portno;
             uint8_t addrtype = ((socks5_udp4msg_t *)curr->data)->addrtype;
-
             if (addrtype == SOCKS5_ADDRTYPE_IPV4) {
                 socks5_udp4msg_t *udp4msg = (void *)curr->data;
-                inet_ntop(AF_INET, &udp4msg->ipaddr4, ipstr, sizeof(ipstr));
+                inet_ntop(AF_INET, &udp4msg->ipaddr4, log_addr, sizeof(log_addr));
                 portno = ntohs(udp4msg->portnum);
             } else if (addrtype == SOCKS5_ADDRTYPE_DOMAIN) {
                 /* Domain format: extract domain and port for logging */
                 uint8_t *msg = curr->data;
                 uint8_t domain_len = msg[4];
-                memcpy(ipstr, msg + 5, domain_len);
-                ipstr[domain_len] = '\0';
+                memcpy(log_addr, msg + 5, domain_len);
+                log_addr[domain_len] = '\0';
                 memcpy(&portno, msg + 5 + domain_len, 2);
                 portno = ntohs(portno);
             } else {
                 socks5_udp6msg_t *udp6msg = (void *)curr->data;
-                inet_ntop(AF_INET6, &udp6msg->ipaddr6, ipstr, sizeof(ipstr));
+                inet_ntop(AF_INET6, &udp6msg->ipaddr6, log_addr, sizeof(log_addr));
                 portno = ntohs(udp6msg->portnum);
             }
             if (nsend < 0) {
-                LOGERR("[udp_socks5_recv_proxyresp_cb] send to %s#%hu: %s", ipstr, portno, strerror(errno));
+                LOGERR("[udp_socks5_recv_proxyresp_cb] send to %s#%hu: %s", log_addr, portno, strerror(errno));
             } else {
-                LOGINF("[udp_socks5_recv_proxyresp_cb] send to %s#%hu, nsend:%zd", ipstr, portno, nsend);
+                LOGINF("[udp_socks5_recv_proxyresp_cb] send to %s#%hu, nsend:%zd", log_addr, portno, nsend);
             }
         }
         udp_packet_node_t *next = curr->next;
@@ -784,12 +781,12 @@ static void udp_socks5_recv_tcpmessage_cb(evloop_t *evloop, struct ev_watcher *w
     char dummy_buf; /* Uninitialized single-byte local stack variable */
 
     /* Pass stack address directly, avoiding implicit initialization and dynamic allocation overhead */
-    ssize_t nrecv = recv(tcp_watcher->fd, &dummy_buf, sizeof(dummy_buf), 0);
+    ssize_t n = recv(tcp_watcher->fd, &dummy_buf, sizeof(dummy_buf), 0);
 
-    if (nrecv > 0) {
+    if (n > 0) {
         LOGERR("[udp_socks5_recv_tcpmessage_cb] recv unknown msg from socks5 server, release ctx");
         udp_socks5ctx_release(evloop, get_udpsk5ctx_by_tcp(tcp_watcher));
-    } else if (nrecv == 0) {
+    } else if (n == 0) {
         LOGINF("[udp_socks5_recv_tcpmessage_cb] recv FIN from socks5 server, release ctx");
         udp_socks5ctx_release(evloop, get_udpsk5ctx_by_tcp(tcp_watcher));
     } else if (errno != EAGAIN && errno != EWOULDBLOCK) {
@@ -846,10 +843,10 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, struct ev_watcher *w
 
     for (int i = 0; i < retval; i++) {
         char *buffer = g_udp_batch_buffer[i];
-        ssize_t nrecv = msgs[i].msg_len;
+        size_t nrecv = (size_t)msgs[i].msg_len;
 
         /* Parse SOCKS5 header - inline logic from handle_udp_socks5_response */
-        if ((size_t)nrecv < sizeof(socks5_udp4msg_t)) {
+        if (nrecv < sizeof(socks5_udp4msg_t)) {
             continue;
         }
 
@@ -860,12 +857,12 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, struct ev_watcher *w
         size_t headerlen;
         if (isipv4) {
             headerlen = sizeof(socks5_udp4msg_t);
-            if ((size_t)nrecv < headerlen) {
+            if (nrecv < headerlen) {
                 continue;
             }
         } else if (isipv6) {
             headerlen = sizeof(socks5_udp6msg_t);
-            if ((size_t)nrecv < headerlen) {
+            if (nrecv < headerlen) {
                 continue;
             }
         } else {
@@ -993,7 +990,7 @@ skip_tproxy_dedup:
         /* Optimization: Use indirect sorting (indices) to avoid memcpy of large structures */
         uint16_t indices[UDP_BATCH_SIZE];
         for (int k = 0; k < send_count; k++) {
-            indices[k] = k;
+            indices[k] = (uint16_t)k;
         }
 
         for (int i = 0; i < send_count;) {
@@ -1029,7 +1026,7 @@ skip_tproxy_dedup:
                 group_msgs[k].msg_len                = 0;
             }
 
-            int sent = sendmmsg(ctx->udp_sockfd, group_msgs, group_count, 0);
+            int sent = sendmmsg(ctx->udp_sockfd, group_msgs, (unsigned int)group_count, 0);
             if (sent < 0) {
                 LOGERR("[udp_socks5_recv_udpmessage_cb] sendmmsg failed: %s", strerror(errno));
             } else {

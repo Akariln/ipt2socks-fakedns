@@ -6,15 +6,16 @@
 
 #include "ev_types.h"
 
-#define TCP_SPLICE_MAXLEN 65535 /* uint16_t: 0~65535 */
+#define TCP_SPLICE_MAXLEN   (256 * 1024) /* match pipe buffer size */
+#define TCP_PIPE_SIZE       (256 * 1024) /* F_SETPIPE_SZ target */
 
 typedef struct tcp_context_t {
     evio_t   client_watcher;   // .data: points to parent tcp_context_t
     evio_t   socks5_watcher;   // .data: points to parent tcp_context_t
     int      client_pipefd[2]; // client pipe buffer
     int      socks5_pipefd[2]; // socks5 pipe buffer
-    uint16_t client_length;    // remaining payload length
-    uint16_t socks5_length;    // remaining payload length
+    uint32_t client_length;    // remaining payload length
+    uint32_t socks5_length;    // remaining payload length
     bool     client_eof;       // self eof
     bool     socks5_eof;       // peer eof
     union {

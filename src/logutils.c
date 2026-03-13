@@ -4,7 +4,7 @@
 #include <stdio.h>
 #include <time.h>
 
-static __thread char g_log_time_str[32] = "0000-00-00 00:00:00";
+static __thread char g_log_time_str[64] = "0000-00-00 00:00:00";
 static __thread long g_log_time_epoch = 0;
 
 static inline void update_log_time(void) {

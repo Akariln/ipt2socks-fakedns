@@ -18,7 +18,7 @@ LDLIBS   := -lm
 ifeq ($(DEBUG), 1)
     BUILD_MODE = debug
     CPPFLAGS  += -DENABLE_SENDTO_LOG -DFAKEDNS_MRU_STATS
-    CFLAGS    += -O0 -g -fsanitize=address,undefined
+    CFLAGS    += -O0 -g -fsanitize=address,undefined -Wsign-conversion -Wconversion
     LDFLAGS   += -g -fsanitize=address,undefined
 else
     CPPFLAGS  += -DNDEBUG

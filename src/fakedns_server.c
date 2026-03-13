@@ -74,7 +74,7 @@ void fakedns_server_recv_cb(evloop_t *evloop, struct ev_watcher *watcher, int re
     }
 
     if (send_count > 0) {
-        int sent = sendmmsg(io_watcher->fd, send_msgs, send_count, 0);
+        int sent = sendmmsg(io_watcher->fd, send_msgs, (unsigned int)send_count, 0);
         if (sent < 0) {
             if (errno != EAGAIN && errno != EWOULDBLOCK) {
                 LOGERR("[fakedns_server_recv_cb] sendmmsg: %s", strerror(errno));

@@ -261,16 +261,16 @@ static void parse_command_args(int argc, char* argv[]) {
                 run_as_user(optarg, argv);
                 break;
             case 'T':
-                g_options &= ~OPT_ENABLE_UDP;
+                g_options &= (uint16_t)~OPT_ENABLE_UDP;
                 break;
             case 'U':
-                g_options &= ~OPT_ENABLE_TCP;
+                g_options &= (uint16_t)~OPT_ENABLE_TCP;
                 break;
             case '4':
-                g_options &= ~OPT_ENABLE_IPV6;
+                g_options &= (uint16_t)~OPT_ENABLE_IPV6;
                 break;
             case '6':
-                g_options &= ~OPT_ENABLE_IPV4;
+                g_options &= (uint16_t)~OPT_ENABLE_IPV4;
                 break;
             case 'R':
                 g_options |= OPT_TCP_USE_REDIRECT;

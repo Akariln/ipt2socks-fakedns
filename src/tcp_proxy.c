@@ -1,6 +1,7 @@
 #include "tcp_proxy.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -142,7 +143,7 @@ void tcp_tproxy_accept_cb(evloop_t *evloop, struct ev_watcher *watcher, int reve
 
     int socks5_sockfd = new_tcp_connect_sockfd(g_server_skaddr.sin6_family, g_tcp_syncnt_max);
     const void *tfo_data = (g_options & OPT_ENABLE_TFO_CONNECT) ? &g_socks5_auth_request : NULL;
-    uint16_t tfo_datalen = (g_options & OPT_ENABLE_TFO_CONNECT) ? sizeof(socks5_authreq_t) : 0;
+    size_t tfo_datalen = (g_options & OPT_ENABLE_TFO_CONNECT) ? sizeof(socks5_authreq_t) : 0;
     ssize_t tfo_nsend = -1; /* if tfo connect succeed: tfo_nsend >= 0 */
 
     if (!tcp_connect(socks5_sockfd, &g_server_skaddr, tfo_data, tfo_datalen, &tfo_nsend)) {
@@ -185,7 +186,7 @@ void tcp_tproxy_accept_cb(evloop_t *evloop, struct ev_watcher *watcher, int reve
     /* build the ipv4/ipv6 proxy request (send to the socks5 proxy server) */
     size_t actual_len = 0;
     socks5_proxy_request_make(context->handshake.req, &skaddr, fake_domain, &actual_len);
-    context->client_length = actual_len;
+    context->client_length = (uint32_t)actual_len;
 
     io_watcher = &context->socks5_watcher;
     if (tfo_nsend >= 0 && (size_t)tfo_nsend >= tfo_datalen) {
@@ -197,7 +198,7 @@ void tcp_tproxy_accept_cb(evloop_t *evloop, struct ev_watcher *watcher, int reve
     }
     ev_io_start(evloop, io_watcher);
 
-    context->socks5_length = (size_t)tfo_nsend;
+    context->socks5_length = (uint32_t)tfo_nsend;
 }
 
 static void tcp_socks5_connect_cb(evloop_t *evloop, struct ev_watcher *watcher, int revents __attribute__((unused))) {
@@ -226,7 +227,7 @@ static int tcp_socks5_send_request(const char *funcname, evloop_t *evloop, evio_
         return 0;
     }
     LOGINF("[%s] send to %s#%hu, nsend:%zd", funcname, g_server_ipstr, g_server_portno, nsend);
-    context->socks5_length += (size_t)nsend;
+    context->socks5_length += (uint32_t)nsend;
     if (context->socks5_length >= datalen) {
         context->socks5_length = 0;
         return 1;
@@ -253,7 +254,7 @@ static int tcp_socks5_recv_response(const char *funcname, evloop_t *evloop, evio
         return -1;
     }
     LOGINF("[%s] recv from %s#%hu, nrecv:%zd", funcname, g_server_ipstr, g_server_portno, nrecv);
-    context->socks5_length += (size_t)nrecv;
+    context->socks5_length += (uint32_t)nrecv;
     if (context->socks5_length >= datalen) {
         context->socks5_length = 0;
         return 1;
@@ -282,7 +283,7 @@ static void tcp_socks5_recv_authresp_cb(evloop_t *evloop, struct ev_watcher *wat
         return;
     }
     const void *data = g_socks5_usrpwd_requestlen ? (const void *)&g_socks5_usrpwd_request : (const void *)context->handshake.req;
-    uint16_t datalen = g_socks5_usrpwd_requestlen ? g_socks5_usrpwd_requestlen : context->client_length;
+    size_t datalen = g_socks5_usrpwd_requestlen ? g_socks5_usrpwd_requestlen : context->client_length;
     int ret = tcp_socks5_send_request("tcp_socks5_recv_authresp_cb", evloop, socks5_watcher, data, datalen);
     if (ret == 1) {
         ev_set_cb(socks5_watcher, g_socks5_usrpwd_requestlen ? tcp_socks5_recv_usrpwdresp_cb : tcp_socks5_recv_proxyresp_cb);
@@ -361,21 +362,13 @@ static void tcp_socks5_recv_proxyresp_cb(evloop_t *evloop, struct ev_watcher *wa
             return;
         }
 
-        if (total_len > 30) {
-            LOGERR("[tcp_socks5_recv_proxyresp_cb] response too large: %zu", total_len);
-            tcp_context_release(evloop, context, true);
+        /* Update length targets */
+        context->client_length = (uint32_t)total_len;
+        context->socks5_length = 5; /* We already have 5 bytes */
+
+        /* Attempt to read the rest immediately */
+        if (tcp_socks5_recv_response("tcp_socks5_recv_proxyresp_cb", evloop, socks5_watcher, context->handshake.resp, context->client_length) != 1) {
             return;
-        }
-
-        if (total_len > 5) {
-            /* Update length targets */
-            context->client_length = total_len;
-            context->socks5_length = 5; /* We already have 5 bytes */
-
-            /* Attempt to read the rest immediately */
-            if (tcp_socks5_recv_response("tcp_socks5_recv_proxyresp_cb", evloop, socks5_watcher, context->handshake.resp, context->client_length) != 1) {
-                return;
-            }
         }
     }
 
@@ -397,6 +390,20 @@ static void tcp_socks5_recv_proxyresp_cb(evloop_t *evloop, struct ev_watcher *wa
         return;
     }
 
+#ifdef F_SETPIPE_SZ
+    int pipe_sz = TCP_PIPE_SIZE;
+    if (fcntl(context->client_pipefd[1], F_SETPIPE_SZ, pipe_sz) < 0) {
+        IF_VERBOSE {
+            LOGERR("[tcp_socks5_recv_proxyresp_cb] set client pipe size failed: %s", strerror(errno));
+        }
+    }
+    if (fcntl(context->socks5_pipefd[1], F_SETPIPE_SZ, pipe_sz) < 0) {
+        IF_VERBOSE {
+            LOGERR("[tcp_socks5_recv_proxyresp_cb] set socks5 pipe size failed: %s", strerror(errno));
+        }
+    }
+#endif
+
     ev_io_start(evloop, &context->client_watcher);
     ev_set_cb(socks5_watcher, tcp_stream_payload_forward_cb);
     LOGINF("[tcp_socks5_recv_proxyresp_cb] tunnel is ready, start forwarding ...");
@@ -409,8 +416,8 @@ static void tcp_stream_payload_forward_cb(evloop_t *evloop, struct ev_watcher *w
     evio_t *peer_watcher = self_is_client ? &context->socks5_watcher : &context->client_watcher;
     bool *self_eof = self_is_client ? &context->client_eof : &context->socks5_eof;
     bool *peer_eof = self_is_client ? &context->socks5_eof : &context->client_eof;
-    uint16_t *self_length = self_is_client ? &context->client_length : &context->socks5_length;
-    uint16_t *peer_length = self_is_client ? &context->socks5_length : &context->client_length;
+    uint32_t *self_length = self_is_client ? &context->client_length : &context->socks5_length;
+    uint32_t *peer_length = self_is_client ? &context->socks5_length : &context->client_length;
 
     if (revents & EV_READ) {
         int *self_pipefd = self_is_client ? context->client_pipefd : context->socks5_pipefd;
@@ -447,7 +454,7 @@ static void tcp_stream_payload_forward_cb(evloop_t *evloop, struct ev_watcher *w
                 shutdown(peer_watcher->fd, SHUT_WR);
             }
         } else {
-            ssize_t nsend = splice(self_pipefd[0], NULL, peer_watcher->fd, NULL, nrecv, SPLICE_F_MOVE | SPLICE_F_NONBLOCK);
+            ssize_t nsend = splice(self_pipefd[0], NULL, peer_watcher->fd, NULL, (size_t)nrecv, SPLICE_F_MOVE | SPLICE_F_NONBLOCK);
             if (nsend < 0) {
                 if (errno != EAGAIN && errno != EWOULDBLOCK) {
                     if (errno == EPIPE || errno == ECONNRESET) {
@@ -463,7 +470,7 @@ static void tcp_stream_payload_forward_cb(evloop_t *evloop, struct ev_watcher *w
                 nsend = 0; // EAGAIN
             }
             if (nsend < nrecv) {
-                *self_length = (size_t)(nrecv - nsend); // remain_length
+                *self_length = (uint32_t)(nrecv - nsend); // remain_length
 
                 int new_self_events = self_watcher->events & ~EV_READ;
                 ev_io_stop(evloop, self_watcher);
@@ -499,7 +506,7 @@ DO_WRITE:
             return;
         }
         if (nsend > 0) {
-            *peer_length -= (uint16_t)nsend;
+            *peer_length -= (uint32_t)nsend;
 
             if (*peer_length == 0) {
                 int new_events = self_watcher->events & ~EV_WRITE;

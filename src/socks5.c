@@ -38,19 +38,19 @@ void socks5_usrpwd_request_make(const char *username, const char *password) {
     usrpwdreq->version = SOCKS5_USRPWD_VERSION;
 
     uint8_t *usrlenptr = (uint8_t *)usrpwdreq + 1;
-    *usrlenptr = strlen(username);
+    *usrlenptr = (uint8_t)strlen(username);
 
     uint8_t *usrbufptr = usrlenptr + 1;
     memcpy(usrbufptr, username, *usrlenptr);
 
     uint8_t *pwdlenptr = usrbufptr + *usrlenptr;
-    *pwdlenptr = strlen(password);
+    *pwdlenptr = (uint8_t)strlen(password);
 
     uint8_t *pwdbufptr = pwdlenptr + 1;
     memcpy(pwdbufptr, password, *pwdlenptr);
 
     /* version(1) + usrlen(1) + username + pwdlen(1) + password */
-    g_socks5_usrpwd_requestlen = 1 + 1 + *usrlenptr + 1 + *pwdlenptr;
+    g_socks5_usrpwd_requestlen = (uint16_t)(1 + 1 + *usrlenptr + 1 + *pwdlenptr);
 }
 
 void socks5_proxy_request_make(void *request, const void *skaddr, const char *domain, size_t *reqlen) {
@@ -62,7 +62,7 @@ void socks5_proxy_request_make(void *request, const void *skaddr, const char *do
     if (domain) {
         socks5_domainreq_t *dreq = request;
         dreq->addrtype = SOCKS5_ADDRTYPE_DOMAIN;
-        dreq->domain_len = strlen(domain);
+        dreq->domain_len = (uint8_t)strlen(domain);
         memcpy(dreq->domain_str, domain, dreq->domain_len);
 
         portno_t port;
