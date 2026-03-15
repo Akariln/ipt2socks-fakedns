@@ -35,24 +35,30 @@ void udp_tproxy_recvmsg_cb(evloop_t *evloop, struct ev_watcher *watcher, int rev
     /* Use maximum header size to allow building headers backward from payload */
     const size_t max_headerlen = MAX_SOCKS5_UDP_HEADER;
 
-    struct mmsghdr msgs[UDP_BATCH_SIZE];
-    struct iovec iovs[UDP_BATCH_SIZE];
-    char msg_control_buffers[UDP_BATCH_SIZE][UDP_CTRLMESG_BUFSIZ];
-    skaddr6_t skaddrs[UDP_BATCH_SIZE];
+    /* Thread-local persistent buffers: static fields are initialized once per thread.
+     * Per-call: only reset msg_namelen and msg_controllen (kernel writes these on return).
+     * msg_flags and msg_len are output-only; memset of msg_control is unnecessary. */
+    static __thread struct mmsghdr msgs[UDP_BATCH_SIZE];
+    static __thread struct iovec iovs[UDP_BATCH_SIZE];
+    static __thread char msg_control_buffers[UDP_BATCH_SIZE][UDP_CTRLMESG_BUFSIZ];
+    static __thread skaddr6_t skaddrs[UDP_BATCH_SIZE];
+    static __thread bool tproxy_recvmsg_initialized = false;
+
+    if (!tproxy_recvmsg_initialized) {
+        for (int i = 0; i < UDP_BATCH_SIZE; i++) {
+            iovs[i].iov_base            = (uint8_t *)g_udp_batch_buffer[i] + max_headerlen;
+            iovs[i].iov_len             = UDP_DATAGRAM_MAXSIZ - max_headerlen;
+            msgs[i].msg_hdr.msg_name    = &skaddrs[i];
+            msgs[i].msg_hdr.msg_iov     = &iovs[i];
+            msgs[i].msg_hdr.msg_iovlen  = 1;
+            msgs[i].msg_hdr.msg_control = msg_control_buffers[i];
+        }
+        tproxy_recvmsg_initialized = true;
+    }
 
     for (int i = 0; i < UDP_BATCH_SIZE; i++) {
-        iovs[i].iov_base = (uint8_t *)g_udp_batch_buffer[i] + max_headerlen;
-        iovs[i].iov_len = UDP_DATAGRAM_MAXSIZ - max_headerlen;
-
-        msgs[i].msg_hdr.msg_name = &skaddrs[i];
-        msgs[i].msg_hdr.msg_namelen = sizeof(skaddr6_t); // Use largest size
-        msgs[i].msg_hdr.msg_iov = &iovs[i];
-        msgs[i].msg_hdr.msg_iovlen = 1;
-        memset(msg_control_buffers[i], 0, UDP_CTRLMESG_BUFSIZ);
-        msgs[i].msg_hdr.msg_control = msg_control_buffers[i];
+        msgs[i].msg_hdr.msg_namelen    = sizeof(skaddr6_t);
         msgs[i].msg_hdr.msg_controllen = UDP_CTRLMESG_BUFSIZ;
-        msgs[i].msg_hdr.msg_flags = 0;
-        msgs[i].msg_len = 0;
     }
 
     /* non-blocking receive */
@@ -356,17 +362,8 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
 
         udp_socks5ctx_t *del_context = NULL;
 
-        // Always populate fork_key for all associations (needed for future Fork Table lookups)
-        context->fork_key.client_ipport = key_ipport;
-        context->fork_key.target_is_ipv4 = isipv4;
-
-        if (isipv4) {
-            context->fork_key.target_ipport.ip.ip4 = ((skaddr4_t *)&skaddr)->sin_addr.s_addr;
-            context->fork_key.target_ipport.port = ((skaddr4_t *)&skaddr)->sin_port;
-        } else {
-            memcpy(&context->fork_key.target_ipport.ip.ip6, &skaddr.sin6_addr.s6_addr, IP6BINLEN);
-            context->fork_key.target_ipport.port = skaddr.sin6_port;
-        }
+        /* fork_key was already built (with padding zeroed) above for table lookup; reuse it. */
+        context->fork_key = fork_key;
 
         if (force_fork) {
             context->is_forked = true;
@@ -770,22 +767,24 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, struct ev_watcher *w
     evio_t *udp_watcher = (evio_t *)watcher;
     udp_socks5ctx_t *socks5ctx = (void *)((uint8_t *)udp_watcher - offsetof(udp_socks5ctx_t, udp_watcher));
 
-    struct mmsghdr msgs[UDP_BATCH_SIZE];
-    struct iovec iovs[UDP_BATCH_SIZE];
+    /* Connected socket: msg_name/msg_control are NULL, kernel never writes back
+     * msg_namelen or msg_controllen, so all fields are constant — init once. */
+    static __thread struct mmsghdr msgs[UDP_BATCH_SIZE];
+    static __thread struct iovec iovs[UDP_BATCH_SIZE];
+    static __thread bool udpmsg_initialized = false;
 
-    /* Prepare for recvmmsg batch receive */
-    for (int i = 0; i < UDP_BATCH_SIZE; i++) {
-        iovs[i].iov_base = g_udp_batch_buffer[i];
-        iovs[i].iov_len = UDP_DATAGRAM_MAXSIZ;
-
-        msgs[i].msg_hdr.msg_iov = &iovs[i];
-        msgs[i].msg_hdr.msg_iovlen = 1;
-        msgs[i].msg_hdr.msg_name = NULL; /* Connected socket, no address needed */
-        msgs[i].msg_hdr.msg_namelen = 0;
-        msgs[i].msg_hdr.msg_control = NULL;
-        msgs[i].msg_hdr.msg_controllen = 0;
-        msgs[i].msg_hdr.msg_flags = 0;
-        msgs[i].msg_len = 0;
+    if (!udpmsg_initialized) {
+        for (int i = 0; i < UDP_BATCH_SIZE; i++) {
+            iovs[i].iov_base               = g_udp_batch_buffer[i];
+            iovs[i].iov_len                = UDP_DATAGRAM_MAXSIZ;
+            msgs[i].msg_hdr.msg_name       = NULL;
+            msgs[i].msg_hdr.msg_namelen    = 0;
+            msgs[i].msg_hdr.msg_iov        = &iovs[i];
+            msgs[i].msg_hdr.msg_iovlen     = 1;
+            msgs[i].msg_hdr.msg_control    = NULL;
+            msgs[i].msg_hdr.msg_controllen = 0;
+        }
+        udpmsg_initialized = true;
     }
 
     int retval = recvmmsg(udp_watcher->fd, msgs, UDP_BATCH_SIZE, MSG_DONTWAIT, NULL);
@@ -797,14 +796,16 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, struct ev_watcher *w
         return;
     }
 
+    if (retval == 0) {
+        return;
+    }
+
     /* Process batch and prepare for sendmmsg */
     struct {
         udp_tproxyctx_t *ctx;
         struct mmsghdr msg;
         struct iovec iov;
         skaddr6_t addr;
-        char *data;
-        size_t len;
     } batch_sends[UDP_BATCH_SIZE];
     int send_count = 0;
 
@@ -885,6 +886,10 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, struct ev_watcher *w
                 fromskaddr.sin6_port = fromipport.port;
             }
             int tproxy_sockfd = new_udp_tpsend_sockfd(dest_isipv4 ? AF_INET : AF_INET6);
+            if (tproxy_sockfd < 0) {
+                LOGERR("[udp_socks5_recv_udpmessage_cb] new_udp_tpsend_sockfd failed");
+                continue;
+            }
             if (bind(tproxy_sockfd, (void *)&fromskaddr, dest_isipv4 ? sizeof(skaddr4_t) : sizeof(skaddr6_t)) < 0) {
                 char ipstr[IP6STRLEN];
                 portno_t portno;
@@ -929,16 +934,14 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, struct ev_watcher *w
         }
 
         /* Prepare send message */
-        batch_sends[send_count].ctx = tproxyctx;
-        batch_sends[send_count].data = buffer + headerlen;
-        batch_sends[send_count].len = nrecv - headerlen;
-        batch_sends[send_count].iov.iov_base = batch_sends[send_count].data;
-        batch_sends[send_count].iov.iov_len = batch_sends[send_count].len;
-        batch_sends[send_count].msg.msg_hdr.msg_name = &batch_sends[send_count].addr;
-        batch_sends[send_count].msg.msg_hdr.msg_namelen = dest_isipv4 ? sizeof(skaddr4_t) : sizeof(skaddr6_t);
-        batch_sends[send_count].msg.msg_hdr.msg_iov = &batch_sends[send_count].iov;
-        batch_sends[send_count].msg.msg_hdr.msg_iovlen = 1;
-        batch_sends[send_count].msg.msg_hdr.msg_control = NULL;
+        batch_sends[send_count].ctx                        = tproxyctx;
+        batch_sends[send_count].iov.iov_base               = buffer + headerlen;
+        batch_sends[send_count].iov.iov_len                = nrecv - headerlen;
+        batch_sends[send_count].msg.msg_hdr.msg_name       = &batch_sends[send_count].addr;
+        batch_sends[send_count].msg.msg_hdr.msg_namelen    = dest_isipv4 ? sizeof(skaddr4_t) : sizeof(skaddr6_t);
+        batch_sends[send_count].msg.msg_hdr.msg_iov        = &batch_sends[send_count].iov;
+        batch_sends[send_count].msg.msg_hdr.msg_iovlen     = 1;
+        batch_sends[send_count].msg.msg_hdr.msg_control    = NULL;
         batch_sends[send_count].msg.msg_hdr.msg_controllen = 0;
 
         send_count++;
@@ -974,19 +977,12 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, struct ev_watcher *w
                 }
             }
 
-            /* Send batch for this socket */
+            /* Compact into a contiguous mmsghdr array for sendmmsg.
+             * Struct copy preserves all pointer fields; msg_name/msg_iov
+             * still point into batch_sends[] which remains valid until return. */
             struct mmsghdr group_msgs[UDP_BATCH_SIZE];
-
             for (int k = 0; k < group_count; k++) {
-                int idx = indices[group_start + k];
-                group_msgs[k].msg_hdr.msg_name       = &batch_sends[idx].addr;
-                group_msgs[k].msg_hdr.msg_namelen    = batch_sends[idx].msg.msg_hdr.msg_namelen;
-                group_msgs[k].msg_hdr.msg_iov        = &batch_sends[idx].iov;
-                group_msgs[k].msg_hdr.msg_iovlen     = 1;
-                group_msgs[k].msg_hdr.msg_control    = NULL;
-                group_msgs[k].msg_hdr.msg_controllen = 0;
-                group_msgs[k].msg_hdr.msg_flags      = 0;
-                group_msgs[k].msg_len                = 0;
+                group_msgs[k] = batch_sends[indices[group_start + k]].msg;
             }
 
             int sent = sendmmsg(ctx->udp_sockfd, group_msgs, (unsigned int)group_count, 0);
