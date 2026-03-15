@@ -79,7 +79,7 @@ void fakedns_server_recv_cb(evloop_t *evloop, struct ev_watcher *watcher, int re
             if (errno != EAGAIN && errno != EWOULDBLOCK) {
                 LOGERR("[fakedns_server_recv_cb] sendmmsg: %s", strerror(errno));
             }
-        } else if (sent >= 0 && sent < send_count) {
+        } else if (sent < send_count) {
             LOGWAR("[fakedns_server_recv_cb] partial send %d/%d, %d responses dropped",
                    sent, send_count, send_count - sent);
         }

@@ -235,7 +235,7 @@ static void parse_command_args(int argc, char* argv[]) {
                 }
             case 'j': {
                     unsigned long val;
-                    if (!validate_uint_range(optarg, 255, &val, "number of worker threads")) {
+                    if (!validate_uint_range(optarg, MAX_THREADS + 1, &val, "number of worker threads")) {
                         goto PRINT_HELP_AND_EXIT;
                     }
                     g_nthreads = (uint8_t)val;
@@ -243,7 +243,7 @@ static void parse_command_args(int argc, char* argv[]) {
                 }
             case 'J': {
                     unsigned long val;
-                    if (!validate_uint_range(optarg, 255, &val, "number of udp threads")) {
+                    if (!validate_uint_range(optarg, MAX_THREADS + 1, &val, "number of udp threads")) {
                         goto PRINT_HELP_AND_EXIT;
                     }
                     g_udp_nthreads = (uint8_t)val;
@@ -534,6 +534,7 @@ static int setup_listen_endpoint(evloop_t *evloop, const listen_endpoint_t *ep,
         sockfd = new_udp_tprecv_sockfd(ep->family, is_reuse_port);
     }
     if (sockfd < 0) {
+        LOGERR("[run_event_loop] create %s socket: %s", ep->tag, strerror(errno));
         return errno;
     }
 

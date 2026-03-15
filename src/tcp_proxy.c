@@ -13,6 +13,13 @@
 #include "logutils.h"
 #include "socks5.h"
 
+_Static_assert(sizeof(socks5_authresp_t)   <= TCP_HANDSHAKE_RESP_MAXLEN, "resp buffer too small");
+_Static_assert(sizeof(socks5_usrpwdresp_t) <= TCP_HANDSHAKE_RESP_MAXLEN, "resp buffer too small");
+_Static_assert(sizeof(socks5_ipv4resp_t)   <= TCP_HANDSHAKE_RESP_MAXLEN, "resp buffer too small");
+_Static_assert(sizeof(socks5_ipv6resp_t)   <= TCP_HANDSHAKE_RESP_MAXLEN, "resp buffer too small");
+_Static_assert(sizeof(socks5_ipv4req_t)    <= TCP_HANDSHAKE_REQ_MAXLEN,  "req buffer too small");
+_Static_assert(sizeof(socks5_ipv6req_t)    <= TCP_HANDSHAKE_REQ_MAXLEN,  "req buffer too small");
+
 /* splice() api */
 #ifndef SPLICE_F_MOVE
 #define SPLICE_F_MOVE 1
@@ -24,6 +31,7 @@
 #endif
 
 /* Forward declarations */
+static void tcp_handshake_timeout_cb(evloop_t *evloop, struct ev_watcher *watcher, int revents);
 static void tcp_socks5_connect_cb(evloop_t *evloop, struct ev_watcher *watcher, int revents);
 static void tcp_socks5_send_authreq_cb(evloop_t *evloop, struct ev_watcher *watcher, int revents);
 static void tcp_socks5_recv_authresp_cb(evloop_t *evloop, struct ev_watcher *watcher, int revents);
@@ -43,6 +51,7 @@ static inline void tcp_context_release(evloop_t *evloop, tcp_context_t *context,
     evio_t *socks5_watcher = &context->socks5_watcher;
     ev_io_stop(evloop, client_watcher);
     ev_io_stop(evloop, socks5_watcher);
+    ev_timer_stop(evloop, &context->handshake_timer);
     if (is_tcp_reset) {
         tcp_close_by_rst(client_watcher->fd);
         tcp_close_by_rst(socks5_watcher->fd);
@@ -85,6 +94,12 @@ void tcp_proxy_close_all_sessions(evloop_t *evloop) {
         tcp_context_release(evloop, curr, false);
         curr = next;
     }
+}
+
+static void tcp_handshake_timeout_cb(evloop_t *evloop, struct ev_watcher *watcher, int revents __attribute__((unused))) {
+    tcp_context_t *context = (tcp_context_t *)watcher->data;
+    LOGERR("[tcp_handshake_timeout_cb] socks5 handshake timed out (%gs), closing", TCP_HANDSHAKE_TIMEOUT_SEC);
+    tcp_context_release(evloop, context, true);
 }
 
 void tcp_tproxy_accept_cb(evloop_t *evloop, struct ev_watcher *watcher, int revents __attribute__((unused))) {
@@ -198,9 +213,12 @@ void tcp_tproxy_accept_cb(evloop_t *evloop, struct ev_watcher *watcher, int reve
         ev_io_init(io_watcher, tfo_nsend >= 0 ? tcp_socks5_send_authreq_cb : tcp_socks5_connect_cb, socks5_sockfd, EV_WRITE);
         tfo_nsend = tfo_nsend >= 0 ? tfo_nsend : 0;
     }
+    context->socks5_length = (uint32_t)tfo_nsend;
     ev_io_start(evloop, io_watcher);
 
-    context->socks5_length = (uint32_t)tfo_nsend;
+    context->handshake_timer.data = context;
+    ev_timer_init(&context->handshake_timer, tcp_handshake_timeout_cb, TCP_HANDSHAKE_TIMEOUT_SEC, 0.);
+    ev_timer_start(evloop, &context->handshake_timer);
 }
 
 static void tcp_socks5_connect_cb(evloop_t *evloop, struct ev_watcher *watcher, int revents __attribute__((unused))) {
@@ -406,6 +424,7 @@ static void tcp_socks5_recv_proxyresp_cb(evloop_t *evloop, struct ev_watcher *wa
     }
 #endif
 
+    ev_timer_stop(evloop, &context->handshake_timer);
     ev_io_start(evloop, &context->client_watcher);
     ev_set_cb(socks5_watcher, tcp_stream_payload_forward_cb);
     LOGINF("[tcp_socks5_recv_proxyresp_cb] tunnel is ready, start forwarding ...");

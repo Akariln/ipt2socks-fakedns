@@ -327,8 +327,8 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
             ev_io_init(watcher, tfo_nsend >= 0 ? udp_socks5_send_authreq_cb : udp_socks5_connect_cb, tcp_sockfd, EV_WRITE);
             tfo_nsend = tfo_nsend >= 0 ? tfo_nsend : 0;
         }
-        ev_io_start(evloop, watcher);
         context->handshake.nbytes = (uint16_t)tfo_nsend; /* nsend or nrecv */
+        ev_io_start(evloop, watcher);
 
         /* tunnel not ready if udp_watcher->data != NULL */
         size_t node_size = sizeof(udp_packet_node_t) + actual_headerlen + nrecv;
@@ -630,7 +630,7 @@ static void udp_socks5_recv_proxyresp_cb(evloop_t *evloop, struct ev_watcher *wa
             return;
         }
 
-        if (total_len > SOCKS5_RESPONSE_MAX_SIZE - 2) {
+        if (total_len > sizeof(context->handshake.payload)) {
             LOGERR("[udp_socks5_recv_proxyresp_cb] response too large: %zu", total_len);
             udp_socks5ctx_release(evloop, context);
             return;
