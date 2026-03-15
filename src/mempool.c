@@ -3,21 +3,11 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/types.h>
 
 #include "logutils.h"
 
-/* ============================================================================
- * Memory Pool Implementation with Doubly Linked List Tracking
- *
- * Design:
- * - Each allocated block has a 64-byte header for cache line alignment
- * - All blocks (pool + bypass) are tracked in a doubly linked list
- * - Pool blocks use an additional free_list for O(1) recycling
- * - On destroy, all blocks are freed via the tracking list
- * ============================================================================ */
-
 #define MEMPOOL_MAGIC_POOL   0xDEADBEEF
-#define MEMPOOL_MAGIC_MALLOC 0xCAFEBABE
 #define MEMPOOL_MAGIC_FREE   0x00000000
 #define CACHELINE_SIZE       64
 #define EXPAND_BATCH_SIZE    32
@@ -25,91 +15,118 @@
 #ifndef MIN
 #define MIN(a,b) (((a)<(b))?(a):(b))
 #endif
-/* 64-byte block header for cache line alignment */
-#define BLOCK_HEADER_FIXED_SIZE (sizeof(uint32_t) * 2 + sizeof(void *) * 3)
-#define BLOCK_HEADER_PADDING    (CACHELINE_SIZE - BLOCK_HEADER_FIXED_SIZE)
 
+/* ----------------------------------------------------------------------------
+ * Memory Topologies & Headers
+ * ---------------------------------------------------------------------------- */
+
+/* 1. Inline Slab Metadata (64 bytes) */
+typedef struct mempool_slab {
+    struct mempool_slab *next;
+    size_t block_count;
+    char padding[CACHELINE_SIZE - sizeof(struct mempool_slab *) - sizeof(size_t)];
+} mempool_slab_t;
+
+_Static_assert(sizeof(mempool_slab_t) == CACHELINE_SIZE, "mempool_slab_t alignment broken");
+
+/* 2. Pool Block Header (64 bytes) */
 typedef struct block_header {
-    uint32_t magic;              /* Magic number for validation */
-    uint32_t data_size;          /* Actual data size for this block */
-    struct block_header *prev;   /* Doubly linked list: prev */
-    struct block_header *next;   /* Doubly linked list: next */
-    struct block_header *next_free; /* Free list pointer (pool blocks only) */
-    char padding[BLOCK_HEADER_PADDING]; /* Pad to 64 bytes */
+    uint32_t magic;
+    uint32_t _pad0;               /* Explicit padding to align next_free to 8 bytes */
+    struct block_header *next_free;
+    char padding[CACHELINE_SIZE - (sizeof(uint32_t) * 2 + sizeof(void *))];
 } block_header_t;
 
-_Static_assert(sizeof(block_header_t) == CACHELINE_SIZE,
-               "block_header_t must be 64 bytes");
+_Static_assert(sizeof(block_header_t) == CACHELINE_SIZE, "block_header_t alignment broken");
 
-/* Memory pool structure */
 struct memory_pool {
-    block_header_t *all_blocks;  /* Doubly linked list of ALL allocated blocks */
-    block_header_t *free_list;   /* Singly linked list of free pool blocks */
-    size_t block_size;           /* User data size per block */
-    size_t total_size;           /* Total size including header (aligned) */
-    size_t pool_blocks;          /* Number of pool blocks allocated */
-    size_t max_blocks;           /* Maximum pool blocks allowed */
-    size_t free_count;           /* Number of blocks in free_list */
-    /* Statistics */
-    size_t pool_allocs;          /* Allocations from pool */
-    size_t pool_frees;           /* Frees to pool */
-    size_t bypass_allocs;        /* Bypass allocations */
-    size_t bypass_frees;         /* Bypass frees */
+    mempool_slab_t  *slab_list;
+    mempool_slab_t  *last_freed_slab; /* Amortized O(1) temporal locality cache */
+
+    block_header_t  *free_list;
+
+    size_t block_size;
+    size_t total_size;
+
+    size_t pool_blocks;
+    size_t max_blocks;
+    size_t free_count;
+
+    size_t pool_allocs;
+    size_t pool_frees;
 };
 
-/* ----------------------------------------------------------------------------
- * Internal: Doubly Linked List Operations
- * ---------------------------------------------------------------------------- */
-
-static inline void dll_insert(block_header_t **head, block_header_t *node) {
-    node->prev = NULL;
-    node->next = *head;
-    if (*head) {
-        (*head)->prev = node;
-    }
-    *head = node;
+static inline void* block_to_data(void *header) {
+    return (char *)header + CACHELINE_SIZE;
 }
 
-static inline void dll_remove(block_header_t **head, block_header_t *node) {
-    if (node->prev) {
-        node->prev->next = node->next;
-    } else {
-        *head = node->next;
-    }
-    if (node->next) {
-        node->next->prev = node->prev;
-    }
-    node->prev = node->next = NULL;
+static inline void* data_to_header(void *ptr) {
+    return (char *)ptr - CACHELINE_SIZE;
 }
 
-/* Convert block header to user data pointer */
-static inline void* block_to_data(block_header_t *header) {
-    return (char *)header + sizeof(block_header_t);
+static size_t mempool_physical_size(memory_pool_t *pool) {
+    if (!pool) {
+        return 0;
+    }
+    size_t total = sizeof(memory_pool_t);
+    mempool_slab_t *slab = pool->slab_list;
+    while (slab) {
+        total += sizeof(mempool_slab_t) + slab->block_count * pool->total_size;
+        slab = slab->next;
+    }
+    return total;
 }
 
 /* ----------------------------------------------------------------------------
- * Internal: Allocate Physical Block
+ * Internal: Slab Expansion
  * ---------------------------------------------------------------------------- */
 
-static block_header_t* alloc_physical_block(memory_pool_t *pool, size_t size, int for_bypass) {
-    size_t total = sizeof(block_header_t) + size;
-
-    void *raw = NULL;
-    if (posix_memalign(&raw, CACHELINE_SIZE, total) != 0) {
-        LOGERR("[mempool] posix_memalign failed for size=%zu", total);
-        return NULL;
+static size_t expand_pool_batch(memory_pool_t *pool, size_t batch_count) {
+    if (batch_count == 0) {
+        return 0;
     }
 
-    block_header_t *header = (block_header_t *)raw;
-    /* Only set magic for bypass blocks; pool blocks will be set by caller */
-    header->magic = for_bypass ? MEMPOOL_MAGIC_MALLOC : MEMPOOL_MAGIC_FREE;
-    header->data_size = for_bypass ? (uint32_t)size : (uint32_t)pool->block_size;
-    header->next_free = NULL;
+    if (batch_count > (SIZE_MAX - sizeof(mempool_slab_t)) / pool->total_size) {
+        LOGERR("[mempool] batch_count=%zu overflows slab_size calculation", batch_count);
+        return 0;
+    }
 
-    /* Insert into all_blocks tracking list */
-    dll_insert(&pool->all_blocks, header);
+    size_t slab_size = sizeof(mempool_slab_t) + batch_count * pool->total_size;
 
-    return header;
+    void *slab_raw = NULL;
+    if (posix_memalign(&slab_raw, CACHELINE_SIZE, slab_size) != 0) {
+        LOGERR("[mempool] posix_memalign failed for slab size=%zu", slab_size);
+        return 0;
+    }
+
+    mempool_slab_t *slab_hdr = (mempool_slab_t *)slab_raw;
+    slab_hdr->block_count = batch_count;
+    slab_hdr->next = pool->slab_list;
+    pool->slab_list = slab_hdr;
+
+    char *block_start = (char *)slab_raw + sizeof(mempool_slab_t);
+    block_header_t *first_block = (block_header_t *)block_start;
+    block_header_t *curr = first_block;
+
+    for (size_t i = 0; i < batch_count; i++) {
+        curr->magic = MEMPOOL_MAGIC_FREE;
+
+        block_header_t *next_block = (block_header_t *)((char *)curr + pool->total_size);
+
+        if (i < batch_count - 1) {
+            curr->next_free = next_block;
+        } else {
+            curr->next_free = pool->free_list;
+        }
+
+        curr = next_block;
+    }
+
+    pool->free_list = first_block;
+    pool->pool_blocks += batch_count;
+    pool->free_count += batch_count;
+
+    return batch_count;
 }
 
 /* ----------------------------------------------------------------------------
@@ -119,32 +136,21 @@ static block_header_t* alloc_physical_block(memory_pool_t *pool, size_t size, in
 memory_pool_t* mempool_create(size_t block_size, size_t initial_blocks, size_t max_blocks) {
     memory_pool_t *pool = calloc(1, sizeof(memory_pool_t));
     if (!pool) {
-        LOGERR("[mempool] failed to allocate pool structure");
         return NULL;
     }
 
     pool->block_size = block_size;
-    /* Align total size to cache line */
-    pool->total_size = (block_size + (size_t)CACHELINE_SIZE - 1) & ~((size_t)CACHELINE_SIZE - 1);
+    size_t base_total = sizeof(block_header_t) + block_size;
+    pool->total_size = (base_total + (size_t)CACHELINE_SIZE - 1) & ~((size_t)CACHELINE_SIZE - 1);
     pool->max_blocks = (max_blocks == 0) ? SIZE_MAX : max_blocks;
 
-    /* Pre-allocate initial blocks */
-    for (size_t i = 0; i < initial_blocks && pool->pool_blocks < pool->max_blocks; i++) {
-        block_header_t *header = alloc_physical_block(pool, pool->total_size, 0);
-        if (!header) {
-            break;
-        }
-
-        /* Add to free list */
-        header->next_free = pool->free_list;
-        pool->free_list = header;
-        pool->pool_blocks++;
-        pool->free_count++;
+    if (initial_blocks > 0) {
+        expand_pool_batch(pool, MIN(initial_blocks, pool->max_blocks));
     }
 
-    LOGINF("[mempool] created: block_size=%zu, initial=%zu, max=%zu, memory=%zu KB",
-           pool->total_size, pool->pool_blocks, pool->max_blocks,
-           pool->pool_blocks * (sizeof(block_header_t) + pool->total_size) / 1024);
+    size_t phys_mem_kb = mempool_physical_size(pool) / 1024;
+    LOGINF("[mempool] create: payload=%-4zu stride=%-4zu | blocks=%zu, max=%zu | memory: %zuKB",
+           pool->block_size, pool->total_size, pool->pool_blocks, pool->max_blocks, phys_mem_kb);
 
     return pool;
 }
@@ -154,48 +160,19 @@ void* mempool_alloc_sized(memory_pool_t *pool, size_t size) {
         return NULL;
     }
 
-    /* Case A: Large object bypass */
     if (size > pool->block_size) {
-        block_header_t *header = alloc_physical_block(pool, size, 1);
-        if (!header) {
-            LOGERR("[mempool] bypass allocation failed for size=%zu", size);
-            return NULL;
-        }
-        pool->bypass_allocs++;
-        return block_to_data(header);
+        LOGERR("[mempool] BUG: alloc size=%zu exceeds block_size=%zu", size, pool->block_size);
+        return NULL;
     }
 
-    /* Case B: Pool exhausted, try batch expansion */
     if (!pool->free_list && pool->pool_blocks < pool->max_blocks) {
-        size_t remaining = pool->max_blocks - pool->pool_blocks;
-        size_t expand_target = MIN(EXPAND_BATCH_SIZE, remaining);
-        size_t added = 0;
-
-        for (size_t i = 0; i < expand_target; i++) {
-            block_header_t *header = alloc_physical_block(pool, pool->total_size, 0);
-            if (!header) {
-                break;
-            }
-
-            header->next_free = pool->free_list;
-            pool->free_list = header;
-            pool->pool_blocks++;
-            pool->free_count++;
-            added++;
-        }
-
-        if (added > 0) {
-            LOGINF("[mempool] batch expanded: +%zu blocks (total: %zu/%zu)",
-                   added, pool->pool_blocks, pool->max_blocks);
-        }
+        expand_pool_batch(pool, MIN(EXPAND_BATCH_SIZE, pool->max_blocks - pool->pool_blocks));
     }
 
-    /* Case C: Allocate from free list */
     if (pool->free_list) {
         block_header_t *header = pool->free_list;
         pool->free_list = header->next_free;
 
-        /* Activate block: set magic to POOL, clear internal pointer */
         header->magic = MEMPOOL_MAGIC_POOL;
         header->next_free = NULL;
 
@@ -204,7 +181,6 @@ void* mempool_alloc_sized(memory_pool_t *pool, size_t size) {
         return block_to_data(header);
     }
 
-    /* Pool exhausted */
     static __thread int warn_counter = 0;
     if (warn_counter++ % 1000 == 0) {
         LOGWAR("[mempool] pool exhausted (%zu/%zu)", pool->pool_blocks, pool->max_blocks);
@@ -215,45 +191,77 @@ void* mempool_alloc_sized(memory_pool_t *pool, size_t size) {
 void* mempool_calloc_sized(memory_pool_t *pool, size_t size) {
     void *ptr = mempool_alloc_sized(pool, size);
     if (ptr) {
-        memset(ptr, 0, size);
+        memset(ptr, 0, pool->block_size);
     }
     return ptr;
 }
 
-void mempool_free_sized(memory_pool_t *pool, void *ptr, size_t size) {
-    (void)size;  /* Size kept for API compatibility */
+static inline bool verify_boundary(memory_pool_t *pool, mempool_slab_t *slab, char *hdr_ptr) {
+    if (!slab) {
+        return false;
+    }
+    char *slab_start = (char *)slab + sizeof(mempool_slab_t);
+    char *slab_end   = slab_start + slab->block_count * pool->total_size;
+
+    if (hdr_ptr >= slab_start && hdr_ptr < slab_end) {
+        return ((size_t)(hdr_ptr - slab_start) % pool->total_size == 0);
+    }
+    return false;
+}
+
+static void internal_free(memory_pool_t *pool, void *ptr) {
     if (!pool || !ptr) {
         return;
     }
 
-    block_header_t *header = (block_header_t *)((char *)ptr - sizeof(block_header_t));
+    char *hdr_ptr = (char *)data_to_header(ptr);
+    block_header_t *valid_header = NULL;
 
-    /* Validate magic */
+    /* Axiom 1: Fast Path via Temporal Locality Cache */
+    if (verify_boundary(pool, pool->last_freed_slab, hdr_ptr)) {
+        valid_header = (block_header_t *)hdr_ptr;
+    } else {
+        /* Axiom 2: Full Topological Boundary Verification (Slow Path) */
+        mempool_slab_t *slab = pool->slab_list;
+        while (slab) {
+            if (verify_boundary(pool, slab, hdr_ptr)) {
+                valid_header = (block_header_t *)hdr_ptr;
+                pool->last_freed_slab = slab; /* Update locality cache */
+                break;
+            }
+            slab = slab->next;
+        }
+    }
+
+    if (!valid_header) {
+        LOGERR("[mempool] FATAL: Boundary verification failed. Interior/Invalid pointer %p", ptr);
+        return; /* Eradicates arbitrary free-list injection */
+    }
+
+    block_header_t *header = valid_header;
+
+    /* Axiom 3: Strict State Integrity */
     if (header->magic == MEMPOOL_MAGIC_FREE) {
-        LOGERR("[mempool] double free detected! ptr=%p", ptr);
+        LOGERR("[mempool] FATAL: Double free detected! ptr=%p", ptr);
         return;
     }
 
-    if (header->magic == MEMPOOL_MAGIC_MALLOC) {
-        /* Bypass block: remove from tracking list and free */
-        header->magic = MEMPOOL_MAGIC_FREE;
-        dll_remove(&pool->all_blocks, header);
-        pool->bypass_frees++;
-        free(header);
+    if (header->magic != MEMPOOL_MAGIC_POOL) {
+        LOGERR("[mempool] FATAL: Invalid magic=0x%08X, ptr=%p (Memory Corruption)", header->magic, ptr);
         return;
     }
 
-    if (header->magic == MEMPOOL_MAGIC_POOL) {
-        /* Pool block: return to free list (keep in all_blocks) */
-        header->magic = MEMPOOL_MAGIC_FREE;  /* Mark as free for double-free detection */
-        header->next_free = pool->free_list;
-        pool->free_list = header;
-        pool->free_count++;
-        pool->pool_frees++;
-        return;
-    }
+    header->magic     = MEMPOOL_MAGIC_FREE;
+    header->next_free = pool->free_list;
+    pool->free_list   = header;
 
-    LOGERR("[mempool] invalid magic=0x%08X, ptr=%p (corruption?)", header->magic, ptr);
+    pool->free_count++;
+    pool->pool_frees++;
+}
+
+void mempool_free_sized(memory_pool_t *pool, void *ptr, size_t size) {
+    (void)size;
+    internal_free(pool, ptr);
 }
 
 size_t mempool_destroy(memory_pool_t *pool) {
@@ -261,57 +269,33 @@ size_t mempool_destroy(memory_pool_t *pool) {
         return 0;
     }
 
-    /* Calculate leaks */
-    size_t pool_leaks = pool->pool_allocs - pool->pool_frees;
-    size_t bypass_leaks = pool->bypass_allocs - pool->bypass_frees;
-    size_t total_leaks = pool_leaks + bypass_leaks;
+    /* Axiom 4: Underflow Guard for Leak Calculation */
+    if (pool->free_count > pool->pool_blocks) {
+        LOGERR("[mempool] FATAL: free_count (%zu) > pool_blocks (%zu). Tracking state corrupted.",
+               pool->free_count, pool->pool_blocks);
+    }
 
-    LOGINF("[mempool] destroy: pool_blocks=%zu, free=%zu, "
-           "pool_alloc=%zu, pool_free=%zu, bypass_alloc=%zu, bypass_free=%zu, leaks=%zu",
-           pool->pool_blocks, pool->free_count,
-           pool->pool_allocs, pool->pool_frees,
-           pool->bypass_allocs, pool->bypass_frees, total_leaks);
+    size_t total_leaks = (pool->free_count <= pool->pool_blocks)
+                         ? (pool->pool_blocks - pool->free_count) : 0;
+
+    size_t phys_mem_kb = mempool_physical_size(pool) / 1024;
+
+    LOGINF("[mempool] destroy: payload=%-4zu stride=%-4zu | blocks=%zu, free=%zu | "
+           "alloc=%zu, free=%zu | leaks=%zu | memory: %zuKB",
+           pool->block_size, pool->total_size, pool->pool_blocks, pool->free_count,
+           pool->pool_allocs, pool->pool_frees, total_leaks, phys_mem_kb);
 
     if (total_leaks > 0) {
-        LOGWAR("[mempool] detected leaks: pool=%zu, bypass=%zu", pool_leaks, bypass_leaks);
+        LOGWAR("[mempool] detected leaks: %zu", total_leaks);
     }
 
-    /* Free ALL blocks via tracking list */
-    size_t freed = 0;
-    block_header_t *curr = pool->all_blocks;
-    while (curr) {
-        block_header_t *next = curr->next;
-        free(curr);
-        freed++;
-        curr = next;
-    }
-
-    /* Expected = pool blocks + unreleased bypass blocks */
-    size_t expected = pool->pool_blocks + bypass_leaks;
-    if (freed != expected) {
-        LOGWAR("[mempool] freed %zu blocks but expected %zu", freed, expected);
+    mempool_slab_t *s_curr = pool->slab_list;
+    while (s_curr) {
+        mempool_slab_t *s_next = s_curr->next;
+        free(s_curr);
+        s_curr = s_next;
     }
 
     free(pool);
     return total_leaks;
-}
-
-void mempool_get_stats(memory_pool_t *pool, size_t *total_blocks,
-                       size_t *free_blocks, size_t *alloc_count,
-                       size_t *free_count) {
-    if (!pool) {
-        return;
-    }
-    if (total_blocks) {
-        *total_blocks = pool->pool_blocks;
-    }
-    if (free_blocks) {
-        *free_blocks = pool->free_count;
-    }
-    if (alloc_count) {
-        *alloc_count = pool->pool_allocs;
-    }
-    if (free_count) {
-        *free_count = pool->pool_frees;
-    }
 }

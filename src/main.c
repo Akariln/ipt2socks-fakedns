@@ -611,20 +611,9 @@ static void* run_event_loop(void *arg) {
     int my_thread_index = is_main_thread ? 0 : thread_info->thread_index;
     bool should_handle_udp = (my_thread_index < g_udp_nthreads) && (g_options & OPT_ENABLE_UDP);
 
-    /* 1. Packet Pool (variable-sized, fixed initial, high limit for throughput) */
+    /* 1. UDP Context Pools */
     if (should_handle_udp) {
-        g_udp_packet_pool = mempool_create(
-                                MEMPOOL_BLOCK_SIZE,
-                                128,
-                                65535
-                            );
-        if (!g_udp_packet_pool) {
-            LOGERR("[run_event_loop] failed to create packet memory pool");
-            exit_code = 1;
-            goto cleanup;
-        }
-
-        /* 2. UDP Context Pool: serves udp_socks5ctx_t (320 bytes) only */
+        /* 1. UDP Context Pool: serves udp_socks5ctx_t (320 bytes) only */
         g_udp_context_pool = mempool_create(
                                  sizeof(udp_socks5ctx_t),
                                  context_initial_blocks,
@@ -636,7 +625,7 @@ static void* run_event_loop(void *arg) {
             goto cleanup;
         }
 
-        /* 3. UDP TProxy Pool: serves udp_tproxyctx_t (120 bytes) only */
+        /* 2. UDP TProxy Pool: serves udp_tproxyctx_t (120 bytes) only */
         g_udp_tproxy_pool = mempool_create(
                                 sizeof(udp_tproxyctx_t),
                                 tproxy_initial_blocks,
@@ -649,7 +638,7 @@ static void* run_event_loop(void *arg) {
         }
     }
 
-    /* TCP Context Pool */
+    /* 2. TCP Context Pool */
     if (g_options & OPT_ENABLE_TCP) {
         g_tcp_context_pool = mempool_create(
                                  sizeof(tcp_context_t),
@@ -762,13 +751,6 @@ cleanup:
     }
 
     /* 3. Destroy memory pools */
-    if (g_udp_packet_pool) {
-        size_t leaks = mempool_destroy(g_udp_packet_pool);
-        if (leaks > 0) {
-            LOGERR("[run_event_loop] packet pool leaks: %zu", leaks);
-        }
-        g_udp_packet_pool = NULL;
-    }
     if (g_udp_context_pool) {
         size_t leaks = mempool_destroy(g_udp_context_pool);
         if (leaks > 0) {

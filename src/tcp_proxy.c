@@ -158,7 +158,7 @@ void tcp_tproxy_accept_cb(evloop_t *evloop, struct ev_watcher *watcher, int reve
         LOGINF("[tcp_tproxy_accept_cb] try to connect to %s#%hu ...", g_server_ipstr, g_server_portno);
     }
 
-    tcp_context_t *context = mempool_calloc_sized(g_tcp_context_pool, sizeof(tcp_context_t));
+    tcp_context_t *context = mempool_alloc_sized(g_tcp_context_pool, sizeof(tcp_context_t));
     if (!context) {
         LOGERR("[tcp_tproxy_accept_cb] mempool_alloc failed");
         tcp_close_by_rst(client_sockfd);
@@ -167,6 +167,8 @@ void tcp_tproxy_accept_cb(evloop_t *evloop, struct ev_watcher *watcher, int reve
     }
     context->client_pipefd[0] = context->client_pipefd[1] = -1;
     context->socks5_pipefd[0] = context->socks5_pipefd[1] = -1;
+    context->client_eof = false;
+    context->socks5_eof = false;
 
     /* Add to session list (prepend) */
     context->prev = NULL;
