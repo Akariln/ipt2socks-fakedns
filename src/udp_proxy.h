@@ -31,7 +31,6 @@ void udp_lrucache_set_maxsize(uint16_t base_size);
 
 #define UDP_QUEUE_MAX_DEPTH      16
 #define UDP_BATCH_SIZE           16
-#define UDP_TPROXY_TIMEOUT_SEC   10
 
 #define MAX_DOMAIN_LEN        255
 #define MAX_SOCKS5_UDP_HEADER 262

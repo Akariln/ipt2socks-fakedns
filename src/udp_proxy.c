@@ -905,7 +905,12 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, struct ev_watcher *w
             memcpy(&tproxyctx->key_ipport, &fromipport, sizeof(fromipport));
             tproxyctx->udp_sockfd = tproxy_sockfd;
             evtimer_t *timer = &tproxyctx->idle_timer;
-            ev_timer_init(timer, udp_tproxy_context_timeout_cb, 0, UDP_TPROXY_TIMEOUT_SEC);
+            /* tproxy timeout = max(idletimeout/2, 10s): tracks session lifetime
+             * without outliving socks5ctx by more than half an idle period. */
+            ev_tstamp tproxy_timeout = g_udp_idletimeout_sec >= 20
+                                       ? (ev_tstamp)g_udp_idletimeout_sec / 2.0
+                                       : 10.0;
+            ev_timer_init(timer, udp_tproxy_context_timeout_cb, 0, tproxy_timeout);
             udp_tproxyctx_t *del_context = udp_tproxyctx_add(&g_udp_tproxyctx_table, tproxyctx);
             if (del_context) {
                 ev_invoke(evloop, &del_context->idle_timer, EV_CUSTOM);
