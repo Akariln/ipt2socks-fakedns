@@ -212,7 +212,7 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
     udp_socks5ctx_t *context = NULL;
     bool force_fork = false;
 
-    // Build fork key for unified lookup (works for IPv4 and IPv6, FakeDNS and standard)
+    /* Build fork key for unified lookup (works for IPv4 and IPv6, FakeDNS and standard) */
     udp_fork_key_t fork_key;
     memset(&fork_key, 0, sizeof(fork_key));
     fork_key.client_ipport = key_ipport;
@@ -314,7 +314,7 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
         }
         memcpy(&context->key_ipport, &key_ipport, sizeof(key_ipport));
 
-        // Save original destination and protocol family
+        /* Save original destination and protocol family */
         context->dest_is_ipv4 = isipv4;
         context->is_fakedns = (fake_domain != NULL);
         if (isipv4) {
@@ -809,15 +809,13 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, struct ev_watcher *w
     } batch_sends[UDP_BATCH_SIZE];
     int send_count = 0;
 
-    /* socks5ctx: single context per watcher. Touch and reset timer immediately at start of batch. */
-    if (retval > 0) {
-        if (socks5ctx->is_forked) {
-            udp_socks5ctx_touch_fork(&g_udp_fork_table, socks5ctx);
-        } else {
-            udp_socks5ctx_touch_main(&g_udp_socks5ctx_table, socks5ctx);
-        }
-        ev_timer_again(evloop, &socks5ctx->idle_timer);
+    /* socks5ctx: single context per watcher. Touch and reset timer once per batch. */
+    if (socks5ctx->is_forked) {
+        udp_socks5ctx_touch_fork(&g_udp_fork_table, socks5ctx);
+    } else {
+        udp_socks5ctx_touch_main(&g_udp_socks5ctx_table, socks5ctx);
     }
+    ev_timer_again(evloop, &socks5ctx->idle_timer);
 
     for (int i = 0; i < retval; i++) {
         char *buffer = g_udp_batch_buffer[i];
@@ -952,8 +950,8 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, struct ev_watcher *w
 
     /* Batch send using sendmmsg - group by tproxy socket */
     if (send_count > 0) {
-        /* Sort by socket fd to maximize batch efficiency */
-        /* Optimization: Use indirect sorting (indices) to avoid memcpy of large structures */
+        /* Group by tproxy socket (ctx pointer) to maximize sendmmsg batch size.
+         * Use indirect index array to avoid memcpy of large batch_sends entries. */
         uint16_t indices[UDP_BATCH_SIZE];
         for (int k = 0; k < send_count; k++) {
             indices[k] = (uint16_t)k;

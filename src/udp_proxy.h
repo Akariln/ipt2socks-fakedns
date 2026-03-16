@@ -36,8 +36,6 @@ void udp_lrucache_set_maxsize(uint16_t base_size);
 #define MAX_DOMAIN_LEN        255
 #define MAX_SOCKS5_UDP_HEADER 262
 
-#define SOCKS5_RESPONSE_MAX_SIZE 32
-
 /* ════════════════════════════════════════════════════════════════════════
  * Pending-packet queue  (used during SOCKS5 handshake)
  * ════════════════════════════════════════════════════════════════════════ */
@@ -87,7 +85,7 @@ typedef struct {
     bool           is_fakedns;   /* true ⟹ FakeDNS session                 */
 
     /* ── libev watchers ────────────────────────────── */
-    evio_t    tcp_watcher;  /* no longer uses .data for handshake buf */
+    evio_t    tcp_watcher;  /* .data unused                           */
     evio_t    udp_watcher;  /* .data → &pending_queue (handshake) | NULL (fwd)    */
     evtimer_t idle_timer;
 
@@ -146,7 +144,6 @@ void udp_tproxyctx_del(udp_tproxyctx_t **cache, udp_tproxyctx_t *entry);
  */
 void udp_socks5ctx_touch_main(udp_socks5ctx_t **cache, udp_socks5ctx_t *entry);
 void udp_socks5ctx_touch_fork(udp_socks5ctx_t **cache, udp_socks5ctx_t *entry);
-void udp_tproxyctx_touch(udp_tproxyctx_t **cache, udp_tproxyctx_t *entry);
 
 /*
  * clear — iterate over all entries and invoke a callback, safe for removal.

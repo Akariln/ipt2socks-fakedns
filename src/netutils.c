@@ -70,9 +70,6 @@ size_t get_nofile_limit(void) {
     return v.rlim_cur;
 }
 
-/* declare function prototype (openwrt?) */
-
-
 void run_as_user(const char *username, char *argv[]) {
     if (geteuid() != 0) {
         return; /* ignore if current user is not root */

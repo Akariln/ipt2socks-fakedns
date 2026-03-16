@@ -23,7 +23,7 @@ uint8_t g_tcp_syncnt_max = 0; // 0: use default syncnt
 
 uint16_t g_udp_idletimeout_sec                           = 60;
 __thread udp_socks5ctx_t *g_udp_socks5ctx_table          = NULL;
-__thread udp_socks5ctx_t *g_udp_fork_table               = NULL; // Fork table
+__thread udp_socks5ctx_t *g_udp_fork_table               = NULL;
 __thread udp_tproxyctx_t *g_udp_tproxyctx_table          = NULL;
 __thread char    g_udp_batch_buffer[UDP_BATCH_SIZE][UDP_DATAGRAM_MAXSIZ];
 __thread memory_pool_t *g_udp_context_pool               = NULL;
