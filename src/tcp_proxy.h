@@ -8,8 +8,7 @@
 #include "fakedns.h"
 #include "socks5.h"
 
-#define TCP_SPLICE_MAXLEN         (256 * 1024) /* match pipe buffer size */
-#define TCP_PIPE_SIZE             (256 * 1024) /* F_SETPIPE_SZ target */
+#define TCP_SPLICE_MAXLEN         (64 * 1024) /* PIPE_DEF_BUFSZ on x86-64 (16 * PAGE_SIZE) */
 #define TCP_HANDSHAKE_TIMEOUT_SEC 15.0         /* ev_tstamp: socks5 handshake deadline */
 
 /* socks5_domainreq_t(5) + domain(FAKEDNS_MAX_DOMAIN_LEN-1) + portno_t(2) */

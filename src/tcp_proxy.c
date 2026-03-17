@@ -410,20 +410,6 @@ static void tcp_socks5_recv_proxyresp_cb(evloop_t *evloop, struct ev_watcher *wa
         return;
     }
 
-#ifdef F_SETPIPE_SZ
-    int pipe_sz = TCP_PIPE_SIZE;
-    if (fcntl(context->client_pipefd[1], F_SETPIPE_SZ, pipe_sz) < 0) {
-        IF_VERBOSE {
-            LOGERR("[tcp_socks5_recv_proxyresp_cb] set client pipe size failed: %s", strerror(errno));
-        }
-    }
-    if (fcntl(context->socks5_pipefd[1], F_SETPIPE_SZ, pipe_sz) < 0) {
-        IF_VERBOSE {
-            LOGERR("[tcp_socks5_recv_proxyresp_cb] set socks5 pipe size failed: %s", strerror(errno));
-        }
-    }
-#endif
-
     ev_timer_stop(evloop, &context->handshake_timer);
     ev_io_start(evloop, &context->client_watcher);
     ev_set_cb(socks5_watcher, tcp_stream_payload_forward_cb);
