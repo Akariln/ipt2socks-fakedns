@@ -724,6 +724,10 @@ static void* run_event_loop(void *arg) {
         ev_io_start(evloop, fakedns_watcher);
     }
 
+    if (should_handle_udp) {
+        udp_proxy_init_gc(evloop);
+    }
+
     ev_run(evloop, 0);
 
 cleanup:

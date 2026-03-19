@@ -6,10 +6,11 @@
  *
  * It provides:
  *   1. MYLRU_HASH_* wrappers around uthash (ADD / GET / DEL / CNT / FOR).
- *   2. Five LRU macro templates that callers instantiate once, in exactly
+ *   2. Six LRU macro templates that callers instantiate once, in exactly
  *      one translation unit, to generate typed cache functions:
  *        LRU_DEFINE_ADD    — insert, evict LRU if over capacity
  *        LRU_DEFINE_GET    — lookup + bump to MRU end
+ *        LRU_DEFINE_FIND   — pure lookup, no LRU bump
  *        LRU_DEFINE_DEL    — unconditional removal
  *        LRU_DEFINE_TOUCH  — bump an existing entry to the MRU end (Touch)
  *        LRU_DEFINE_CLEAR  — iterate and invoke a callback on all entries
@@ -115,6 +116,13 @@ type* func_name(type **cache, const key_type *keyptr) {                      \
         MYLRU_HASH_DEL(*cache, entry);                                           \
         MYLRU_HASH_ADD(*cache, entry, &entry->key_field, sizeof(entry->key_field)); \
     }                                                                        \
+    return entry;                                                            \
+}
+
+#define LRU_DEFINE_FIND(func_name, type, key_type)                           \
+type* func_name(type **cache, const key_type *keyptr) {                      \
+    type *entry = NULL;                                                      \
+    MYLRU_HASH_GET(*cache, entry, keyptr, sizeof(key_type));                 \
     return entry;                                                            \
 }
 

@@ -86,7 +86,9 @@ typedef struct {
     /* ── libev watchers ────────────────────────────── */
     evio_t    tcp_watcher;  /* .data unused                           */
     evio_t    udp_watcher;  /* .data → &pending_queue (handshake) | NULL (fwd)    */
-    evtimer_t idle_timer;
+
+    /* ── GC timestamp (replaces per-context ev_timer) ── */
+    ev_tstamp last_active;
 
     /* ── SOCKS5 handshake state ─────────────────────── */
     union {
@@ -112,7 +114,7 @@ typedef struct {
 typedef struct {
     ip_port_t key_ipport;   /* (remote) source socket address */
     int       udp_sockfd;   /* bound to the above address      */
-    evtimer_t idle_timer;
+    ev_tstamp last_active;  /* GC timestamp (replaces per-context ev_timer) */
 
     myhash_hh hh;           /* uthash bookkeeping              */
 } udp_tproxyctx_t;
@@ -131,6 +133,10 @@ udp_tproxyctx_t* udp_tproxyctx_add(udp_tproxyctx_t **cache, udp_tproxyctx_t *ent
 udp_socks5ctx_t* udp_socks5ctx_get(udp_socks5ctx_t **cache, const ip_port_t      *keyptr);
 udp_socks5ctx_t* udp_socks5ctx_fork_get(udp_socks5ctx_t **cache, const udp_fork_key_t *keyptr);
 udp_tproxyctx_t* udp_tproxyctx_get(udp_tproxyctx_t **cache, const ip_port_t      *keyptr);
+
+/* find — pure lookup, no LRU bump; returns NULL on miss */
+udp_socks5ctx_t* udp_socks5ctx_find(udp_socks5ctx_t **cache, const ip_port_t      *keyptr);
+udp_socks5ctx_t* udp_socks5ctx_fork_find(udp_socks5ctx_t **cache, const udp_fork_key_t *keyptr);
 
 /* del — unconditional removal */
 void udp_socks5ctx_del(udp_socks5ctx_t **cache, udp_socks5ctx_t *entry);
@@ -162,5 +168,7 @@ void udp_tproxyctx_clear(udp_tproxyctx_t **cache, udp_tproxyctx_cb_t cb, void *c
 
 void udp_tproxy_recvmsg_cb(evloop_t *evloop, struct ev_watcher *watcher, int revents);
 void udp_proxy_close_all_sessions(evloop_t *evloop);
+void udp_proxy_init_gc(evloop_t *evloop);
+void udp_proxy_stop_gc(evloop_t *evloop);
 
 #endif /* IPT2SOCKS_UDP_PROXY_H */

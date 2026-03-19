@@ -52,6 +52,9 @@ LRU_DEFINE_ADD(udp_socks5ctx_add,
 LRU_DEFINE_GET(udp_socks5ctx_get,
                udp_socks5ctx_t, ip_port_t, key_ipport)
 
+LRU_DEFINE_FIND(udp_socks5ctx_find,
+                udp_socks5ctx_t, ip_port_t)
+
 LRU_DEFINE_DEL(udp_socks5ctx_del,
                udp_socks5ctx_t)
 
@@ -65,6 +68,9 @@ LRU_DEFINE_ADD(udp_socks5ctx_fork_add,
 
 LRU_DEFINE_GET(udp_socks5ctx_fork_get,
                udp_socks5ctx_t, udp_fork_key_t, fork_key)
+
+LRU_DEFINE_FIND(udp_socks5ctx_fork_find,
+                udp_socks5ctx_t, udp_fork_key_t)
 
 /* Fork Table shares udp_socks5ctx_del with Main Table — no separate DEL needed */
 
