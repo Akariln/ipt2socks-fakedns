@@ -157,6 +157,11 @@ void tcp_tproxy_accept_cb(evloop_t *evloop, struct ev_watcher *watcher, int reve
     }
 
     int socks5_sockfd = new_tcp_connect_sockfd(g_server_skaddr.sin6_family, g_tcp_syncnt_max);
+    if (socks5_sockfd < 0) {
+        LOGERR("[tcp_tproxy_accept_cb] new_tcp_connect_sockfd: %s", strerror(errno));
+        tcp_close_by_rst(client_sockfd);
+        return;
+    }
     const void *tfo_data = (g_options & OPT_ENABLE_TFO_CONNECT) ? &g_socks5_auth_request : NULL;
     size_t tfo_datalen = (g_options & OPT_ENABLE_TFO_CONNECT) ? sizeof(socks5_authreq_t) : 0;
     ssize_t tfo_nsend = -1; /* if tfo connect succeed: tfo_nsend >= 0 */
