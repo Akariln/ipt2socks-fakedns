@@ -12,6 +12,23 @@
 #include "logutils.h"
 #include "socks5.h"
 
+/* ── Compile-time layout assertions ── */
+
+/* handshake payload must hold every SOCKS5 response received during handshake */
+_Static_assert(sizeof(socks5_authresp_t)   <= sizeof(((udp_socks5ctx_t *)0)->handshake.payload), "handshake payload too small for authresp");
+_Static_assert(sizeof(socks5_usrpwdresp_t) <= sizeof(((udp_socks5ctx_t *)0)->handshake.payload), "handshake payload too small for usrpwdresp");
+_Static_assert(sizeof(socks5_ipv4resp_t)   <= sizeof(((udp_socks5ctx_t *)0)->handshake.payload), "handshake payload too small for ipv4resp");
+_Static_assert(sizeof(socks5_ipv6resp_t)   <= sizeof(((udp_socks5ctx_t *)0)->handshake.payload), "handshake payload too small for ipv6resp");
+
+/* MAX_SOCKS5_UDP_HEADER must cover the largest possible UDP encapsulation header */
+_Static_assert(sizeof(socks5_udp4msg_t) <= MAX_SOCKS5_UDP_HEADER, "MAX_SOCKS5_UDP_HEADER too small for ipv4");
+_Static_assert(sizeof(socks5_udp6msg_t) <= MAX_SOCKS5_UDP_HEADER, "MAX_SOCKS5_UDP_HEADER too small for ipv6");
+_Static_assert(sizeof(socks5_udp_domainmsg_t) + MAX_DOMAIN_LEN + sizeof(portno_t) <= MAX_SOCKS5_UDP_HEADER,
+               "MAX_SOCKS5_UDP_HEADER too small for domain");
+
+/* fork_key must start at a 0-offset within udp_socks5ctx_t.fork_key for hash key correctness */
+_Static_assert(offsetof(udp_fork_key_t, client_ipport) == 0, "fork_key hash relies on client_ipport at offset 0");
+
 /* Forward declarations */
 static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, struct msghdr *msg, size_t nrecv, char *buffer);
 static void udp_socks5_connect_cb(evloop_t *evloop, struct ev_watcher *watcher, int revents);

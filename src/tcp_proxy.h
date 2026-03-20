@@ -23,15 +23,24 @@ typedef struct tcp_context_t {
     evio_t   socks5_watcher;   // .data: points to parent tcp_context_t
     int      client_pipefd[2]; // client pipe buffer
     int      socks5_pipefd[2]; // socks5 pipe buffer
-    uint32_t client_length;    // remaining payload length
-    uint32_t socks5_length;    // remaining payload length
     bool     client_eof;       // self eof
     bool     socks5_eof;       // peer eof
     evtimer_t handshake_timer; // fired if socks5 handshake exceeds TCP_HANDSHAKE_TIMEOUT_SEC
-    struct {
-        uint8_t req[TCP_HANDSHAKE_REQ_MAXLEN];   // socks5 proxy request
-        uint8_t resp[TCP_HANDSHAKE_RESP_MAXLEN];  // socks5 handshake response
-    } handshake;
+    union {
+        /* Active during SOCKS5 handshake (before tunnel is established) */
+        struct {
+            uint8_t  req[TCP_HANDSHAKE_REQ_MAXLEN];   // socks5 proxy request
+            uint8_t  resp[TCP_HANDSHAKE_RESP_MAXLEN];  // socks5 handshake response
+            uint32_t req_len;      // proxy request total length
+            uint32_t io_offset;    // current send/recv byte offset
+            uint32_t resp_expect;  // expected proxy response length (two-phase read)
+        } hs;
+        /* Active during payload forwarding (after tunnel is established) */
+        struct {
+            uint32_t client_pending; // bytes remaining in client→socks5 pipe
+            uint32_t socks5_pending; // bytes remaining in socks5→client pipe
+        } fwd;
+    };
     struct tcp_context_t *prev;  // Doubly linked list for cleanup
     struct tcp_context_t *next;
 } tcp_context_t;
