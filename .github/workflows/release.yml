@@ -22,26 +22,26 @@ jobs:
           - name: ipt2socks@mips-linux-musl@mips32
             target: mips-linux-musl
             cflags: -mips32
-          - name: ipt2socks@mips-linux-musl@mips32+soft_float
-            target: mips-linux-musl
+          - name: ipt2socks@mips-linux-muslsf@mips32+soft_float
+            target: mips-linux-muslsf
             cflags: -mips32 -msoft-float
           - name: ipt2socks@mips64-linux-musl@mips64
             target: mips64-linux-musl
             cflags: -mips64
-          - name: ipt2socks@mips64-linux-musl@mips64+soft_float
-            target: mips64-linux-musl
+          - name: ipt2socks@mips64-linux-musln32sf@mips64+soft_float
+            target: mips64-linux-musln32sf
             cflags: -mips64 -msoft-float
           - name: ipt2socks@mips64el-linux-musl@mips64
             target: mips64el-linux-musl
             cflags: -mips64
-          - name: ipt2socks@mips64el-linux-musl@mips64+soft_float
-            target: mips64el-linux-musl
+          - name: ipt2socks@mips64el-linux-musln32sf@mips64+soft_float
+            target: mips64el-linux-musln32sf
             cflags: -mips64 -msoft-float
           - name: ipt2socks@mipsel-linux-musl@mips32
             target: mipsel-linux-musl
             cflags: -mips32
-          - name: ipt2socks@mipsel-linux-musl@mips32+soft_float
-            target: mipsel-linux-musl
+          - name: ipt2socks@mipsel-linux-muslsf@mips32+soft_float
+            target: mipsel-linux-muslsf
             cflags: -mips32 -msoft-float
           - name: ipt2socks@x86_64-linux-musl@x86_64
             target: x86_64-linux-musl
@@ -68,12 +68,12 @@ jobs:
                   -DNDEBUG -D_GNU_SOURCE ${{ matrix.cflags }} \
                   -include src/libev_config.h -w -c libev/ev.c -o libev/ev.o && \
               gcc -std=c99 -Wall -Wextra -Wvla -pthread -O3 -flto=auto -fno-strict-aliasing -ffunction-sections -fdata-sections \
-                  -DNDEBUG -D_GNU_SOURCE ${{ matrix.cflags }} \
+                  -DNDEBUG -D_GNU_SOURCE -DXXH_INLINE_ALL ${{ matrix.cflags }} \
                   -I./uthash -I./xxhash \
                   -Wl,--gc-sections -s -static \
                   -o ipt2socks \
                   src/main.c src/ctx.c src/netutils.c src/socks5.c src/fakedns.c \
-                  src/fakedns_server.c xxhash/xxhash.c src/logutils.c src/mempool.c src/udp_proxy.c src/tcp_proxy.c \
+                  src/fakedns_server.c src/logutils.c src/mempool.c src/udp_proxy.c src/tcp_proxy.c \
                   src/udp_lrucache.c \
                   libev/ev.o -lm"
 
