@@ -139,25 +139,22 @@ void tcp_tproxy_accept_cb(evloop_t *evloop, struct ev_watcher *watcher, int reve
 
     /* FakeDNS reverse lookup for domain resolution */
     const char *fake_domain = NULL;
-    char domain_buf[FAKEDNS_MAX_DOMAIN_LEN];
     if ((g_options & OPT_ENABLE_FAKEDNS) && isipv4) {
         uint32_t target_ip = ((skaddr4_t *)&skaddr)->sin_addr.s_addr;
-        if (fakedns_is_fakeip(target_ip)) {
-            if (fakedns_reverse_lookup(target_ip, domain_buf, sizeof(domain_buf))) {
-                fake_domain = domain_buf;
-                IF_VERBOSE {
-                    LOGINF("[tcp_tproxy_accept_cb] fakedns hit: %u.%u.%u.%u -> %s",
-                           ((uint8_t *)&target_ip)[0], ((uint8_t *)&target_ip)[1],
-                           ((uint8_t *)&target_ip)[2], ((uint8_t *)&target_ip)[3],
-                           fake_domain);
-                }
-            } else {
-                LOGERR("[tcp_tproxy_accept_cb] fakedns miss for FakeIP: %u.%u.%u.%u, dropping connection",
-                       ((uint8_t *)&target_ip)[0], ((uint8_t *)&target_ip)[1],
-                       ((uint8_t *)&target_ip)[2], ((uint8_t *)&target_ip)[3]);
-                tcp_close_by_rst(client_sockfd);
-                return;
-            }
+        bool is_miss;
+        fake_domain = fakedns_try_resolve(target_ip, &is_miss);
+        if (is_miss) {
+            LOGERR("[tcp_tproxy_accept_cb] fakedns miss for FakeIP: %u.%u.%u.%u, dropping connection",
+                   ((uint8_t *)&target_ip)[0], ((uint8_t *)&target_ip)[1],
+                   ((uint8_t *)&target_ip)[2], ((uint8_t *)&target_ip)[3]);
+            tcp_close_by_rst(client_sockfd);
+            return;
+        }
+        IF_VERBOSE if (fake_domain) {
+            LOGINF("[tcp_tproxy_accept_cb] fakedns hit: %u.%u.%u.%u -> %s",
+                   ((uint8_t *)&target_ip)[0], ((uint8_t *)&target_ip)[1],
+                   ((uint8_t *)&target_ip)[2], ((uint8_t *)&target_ip)[3],
+                   fake_domain);
         }
     }
 

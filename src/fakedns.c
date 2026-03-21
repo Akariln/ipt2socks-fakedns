@@ -303,6 +303,17 @@ bool fakedns_is_fakeip(uint32_t ip_net) {
     return ((ip_host & g_fakeip_mask_host) == g_fakeip_net_host);
 }
 
+const char *fakedns_try_resolve(uint32_t ip_net, bool *is_miss) {
+    *is_miss = false;
+    if (!fakedns_is_fakeip(ip_net)) return NULL;
+    static __thread char resolve_buf[FAKEDNS_MAX_DOMAIN_LEN];
+    if (fakedns_reverse_lookup(ip_net, resolve_buf, sizeof(resolve_buf))) {
+        return resolve_buf;
+    }
+    *is_miss = true;
+    return NULL;
+}
+
 bool fakedns_reverse_lookup(uint32_t ip, char *buffer, size_t buf_len) {
     if (!buffer || buf_len == 0) {
         return false;

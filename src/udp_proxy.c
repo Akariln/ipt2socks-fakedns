@@ -220,24 +220,21 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
 
     /* FakeDNS reverse lookup for domain resolution */
     const char *fake_domain = NULL;
-    char domain_buf[FAKEDNS_MAX_DOMAIN_LEN];
     if ((g_options & OPT_ENABLE_FAKEDNS) && isipv4) {
         uint32_t target_ip = ((skaddr4_t *)&skaddr)->sin_addr.s_addr;
-        if (fakedns_is_fakeip(target_ip)) {
-            if (fakedns_reverse_lookup(target_ip, domain_buf, sizeof(domain_buf))) {
-                fake_domain = domain_buf;
-                IF_VERBOSE {
-                    LOGINF("[handle_udp_socket_msg] fakedns hit: %u.%u.%u.%u -> %s",
-                           ((uint8_t *)&target_ip)[0], ((uint8_t *)&target_ip)[1],
-                           ((uint8_t *)&target_ip)[2], ((uint8_t *)&target_ip)[3],
-                           fake_domain);
-                }
-            } else {
-                LOGERR("[handle_udp_socket_msg] fakedns miss for FakeIP: %u.%u.%u.%u, dropping packet",
-                       ((uint8_t *)&target_ip)[0], ((uint8_t *)&target_ip)[1],
-                       ((uint8_t *)&target_ip)[2], ((uint8_t *)&target_ip)[3]);
-                return;
-            }
+        bool is_miss;
+        fake_domain = fakedns_try_resolve(target_ip, &is_miss);
+        if (is_miss) {
+            LOGERR("[handle_udp_socket_msg] fakedns miss for FakeIP: %u.%u.%u.%u, dropping packet",
+                   ((uint8_t *)&target_ip)[0], ((uint8_t *)&target_ip)[1],
+                   ((uint8_t *)&target_ip)[2], ((uint8_t *)&target_ip)[3]);
+            return;
+        }
+        IF_VERBOSE if (fake_domain) {
+            LOGINF("[handle_udp_socket_msg] fakedns hit: %u.%u.%u.%u -> %s",
+                   ((uint8_t *)&target_ip)[0], ((uint8_t *)&target_ip)[1],
+                   ((uint8_t *)&target_ip)[2], ((uint8_t *)&target_ip)[3],
+                   fake_domain);
         }
     }
 
@@ -288,9 +285,11 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
         if (main_ctx) {
             /* Check for collisions that require forking:
              * 1. Protocol family mismatch (IPv4 vs IPv6)
-             * 2. Type mismatch (FakeDNS session occupying main slot)
+             * 2. Type mismatch (FakeDNS session occupying main slot — only possible
+             *    when OPT_ENABLE_FAKEDNS; skip the check otherwise)
              */
-            if ((main_ctx->dest_is_ipv4 != isipv4) || main_ctx->is_fakedns) {
+            if (main_ctx->dest_is_ipv4 != isipv4 ||
+                    ((g_options & OPT_ENABLE_FAKEDNS) && main_ctx->is_fakedns)) {
                 /* Protocol mismatch (e.g. client used same port for IPv4 and IPv6 dest)
                  * OR Type mismatch (FakeDNS session occupying main slot).
                  * Sync last_active and bump main_ctx to MRU tail. */
@@ -355,12 +354,16 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
         /* Save original destination and protocol family */
         context->dest_is_ipv4 = isipv4;
         context->is_fakedns = (fake_domain != NULL);
-        if (isipv4) {
-            context->orig_dstaddr.ip.ip4 = ((skaddr4_t *)&skaddr)->sin_addr.s_addr;
-            context->orig_dstaddr.port = ((skaddr4_t *)&skaddr)->sin_port;
-        } else {
-            memcpy(&context->orig_dstaddr.ip.ip6, &skaddr.sin6_addr.s6_addr, IP6BINLEN);
-            context->orig_dstaddr.port = skaddr.sin6_port;
+        if (fake_domain) {
+            /* orig_dstaddr is only consumed in the response path when is_fakedns is set,
+             * because the SOCKS5 UDP relay rewrites the source address. */
+            if (isipv4) {
+                context->orig_dstaddr.ip.ip4 = ((skaddr4_t *)&skaddr)->sin_addr.s_addr;
+                context->orig_dstaddr.port = ((skaddr4_t *)&skaddr)->sin_port;
+            } else {
+                memcpy(&context->orig_dstaddr.ip.ip6, &skaddr.sin6_addr.s6_addr, IP6BINLEN);
+                context->orig_dstaddr.port = skaddr.sin6_port;
+            }
         }
 
         evio_t *watcher = &context->tcp_watcher;
