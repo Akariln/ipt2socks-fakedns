@@ -62,24 +62,29 @@ jobs:
 
       - name: Build with Docker
         run: |
-          docker run --rm -v "$(pwd):/src" -w /src muslcc/x86_64:${{ matrix.target }} \
-              /bin/sh -c "\
-              gcc -std=c99 -Wall -Wextra -Wvla -pthread -O3 -flto=auto -fno-strict-aliasing -ffunction-sections -fdata-sections \
-                  -DNDEBUG -D_GNU_SOURCE ${{ matrix.cflags }} \
-                  -include src/libev_config.h -w -c libev/ev.c -o libev/ev.o && \
-              gcc -std=c99 -Wall -Wextra -Wvla -pthread -O3 -flto=auto -fno-strict-aliasing -ffunction-sections -fdata-sections \
-                  -DNDEBUG -D_GNU_SOURCE -DXXH_INLINE_ALL ${{ matrix.cflags }} \
-                  -I./uthash -I./xxhash \
-                  -Wl,--gc-sections -s -static \
-                  -o ipt2socks \
-                  src/main.c src/ctx.c src/netutils.c src/socks5.c src/fakedns.c \
-                  src/fakedns_server.c src/logutils.c src/mempool.c src/udp_proxy.c src/tcp_proxy.c \
-                  src/udp_lrucache.c \
-                  libev/ev.o -lm"
+          docker run --rm -v "$(pwd):/src" -w /src \
+              -e "ARCH_CFLAGS=${{ matrix.cflags }}" \
+              muslcc/x86_64:${{ matrix.target }} /bin/sh -c '
+          set -e
+          CPPFLAGS="-D_GNU_SOURCE -DXXH_INLINE_ALL -I./uthash -I./xxhash -DNDEBUG"
+          CFLAGS="-std=c99 -Wall -Wextra -Wvla -pthread -fno-strict-aliasing -ffunction-sections -fdata-sections ${ARCH_CFLAGS} -O3 -flto=auto"
+          LDFLAGS="-pthread -Wl,--gc-sections -O3 -flto=auto -static -s"
+          SRCS="main ctx netutils socks5 fakedns fakedns_server logutils mempool udp_proxy tcp_proxy udp_lrucache"
 
-          # Fix ownership
+          echo "==> Compiling libev"
+          gcc $CPPFLAGS $CFLAGS -fno-sanitize=undefined -include src/libev_config.h -w -c libev/ev.c -o libev/ev.o
+
+          echo "==> Compiling sources"
+          for m in $SRCS; do
+              gcc $CPPFLAGS $CFLAGS -c "src/${m}.c" -o "src/${m}.o"
+          done
+
+          echo "==> Linking"
+          OBJS=""; for m in $SRCS; do OBJS="$OBJS src/${m}.o"; done
+          gcc $LDFLAGS -o ipt2socks $OBJS libev/ev.o -lm
+          '
+
           sudo chown -R $USER:$USER .
-          
           mv ipt2socks ${{ matrix.name }}
           sha256sum ${{ matrix.name }} > ${{ matrix.name }}.sha256
 
