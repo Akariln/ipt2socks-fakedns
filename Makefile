@@ -9,30 +9,26 @@ SRCS = src/main.c src/ctx.c src/netutils.c src/socks5.c \
        src/udp_lrucache.c
 
 BUILD_MODE := release
-CPPFLAGS := -D_GNU_SOURCE -DXXH_INLINE_ALL -MMD -MP -I./uthash -I./xxhash
-CFLAGS   := -std=c99 -Wall -Wextra -Wvla -pthread -fno-strict-aliasing \
-            -ffunction-sections -fdata-sections $(EXTRA_CFLAGS)
-LDFLAGS  := -pthread -Wl,--gc-sections $(EXTRA_LDFLAGS)
-LDLIBS   := -lm
+CPPFLAGS   := -D_GNU_SOURCE -DXXH_INLINE_ALL -MMD -MP -I./uthash -I./xxhash
+CFLAGS     := -std=c99 -Wall -Wextra -Wvla -pthread -fno-strict-aliasing \
+              -ffunction-sections -fdata-sections $(EXTRA_CFLAGS)
+LDFLAGS    := -pthread -Wl,--gc-sections $(EXTRA_LDFLAGS)
+LDLIBS     := -lm
 
 ifeq ($(DEBUG), 1)
-    BUILD_MODE = debug
-    CPPFLAGS  += -DENABLE_SENDTO_LOG -DFAKEDNS_MRU_STATS
-    CFLAGS    += -O0 -g -fsanitize=address,undefined -Wsign-conversion -Wconversion
-    LDFLAGS   += -g -fsanitize=address,undefined
+    BUILD_MODE := debug
+    CPPFLAGS   += -DENABLE_SENDTO_LOG -DFAKEDNS_MRU_STATS
+    CFLAGS     += -O0 -g -fsanitize=address,undefined -Wsign-conversion -Wconversion
+    LDFLAGS    += -g -fsanitize=address,undefined
 else
-    CPPFLAGS  += -DNDEBUG
-    CFLAGS    += -O3 -flto=auto
-    LDFLAGS   += -O3 -flto=auto
+    CPPFLAGS   += -DNDEBUG
+    CFLAGS     += -O3 -flto=auto
+    LDFLAGS    += -O3 -flto=auto -s
 endif
 
 ifeq ($(STATIC), 1)
     BUILD_MODE := $(BUILD_MODE)-static
     LDFLAGS    += -static
-endif
-
-ifneq ($(DEBUG), 1)
-    LDFLAGS += -s
 endif
 
 BUILD_DIR := build/$(BUILD_MODE)
@@ -68,7 +64,7 @@ help:
 	@echo "  make install PREFIX=/usr"
 
 $(MAIN): $(OBJS)
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
 $(BUILD_DIR)/src/%.o: src/%.c
 	@mkdir -p $(@D)
