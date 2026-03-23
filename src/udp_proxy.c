@@ -980,7 +980,6 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, struct ev_watcher *w
 
         /* Get or create tproxy context */
         udp_tproxyctx_t *tproxyctx = udp_tproxyctx_find(&g_udp_tproxyctx_table, &fromipport);
-        bool is_new_ctx = !tproxyctx;
         if (!tproxyctx) {
             skaddr6_t fromskaddr;
             memset(&fromskaddr, 0, sizeof(fromskaddr));
@@ -1021,23 +1020,21 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, struct ev_watcher *w
                 LOGINF("[udp_socks5_recv_udpmessage_cb] tproxyctx table full, deferring eviction");
                 deferred_evict[deferred_evict_count++] = del_context;
             }
+            IF_VERBOSE {
+                char src_ipstr[IP6STRLEN];
+                char dst_ipstr[IP6STRLEN];
+                if (dest_isipv4) {
+                    inet_ntop(AF_INET, &fromipport.ip.ip4, src_ipstr, sizeof(src_ipstr));
+                    inet_ntop(AF_INET, &socks5ctx->key_ipport.ip.ip4, dst_ipstr, sizeof(dst_ipstr));
+                } else {
+                    inet_ntop(AF_INET6, &fromipport.ip.ip6, src_ipstr, sizeof(src_ipstr));
+                    inet_ntop(AF_INET6, &socks5ctx->key_ipport.ip.ip6, dst_ipstr, sizeof(dst_ipstr));
+                }
+                LOGINF("[udp_socks5_recv_udpmessage_cb] new tproxy context: %s#%hu -> %s#%hu",
+                       src_ipstr, ntohs(fromipport.port), dst_ipstr, ntohs(socks5ctx->key_ipport.port));
+            }
         } else {
             tproxyctx->last_active = ev_now(evloop);
-        }
-
-        IF_VERBOSE {
-            char src_ipstr[IP6STRLEN];
-            char dst_ipstr[IP6STRLEN];
-            if (dest_isipv4) {
-                inet_ntop(AF_INET, &fromipport.ip.ip4, src_ipstr, sizeof(src_ipstr));
-                inet_ntop(AF_INET, &socks5ctx->key_ipport.ip.ip4, dst_ipstr, sizeof(dst_ipstr));
-            } else {
-                inet_ntop(AF_INET6, &fromipport.ip.ip6, src_ipstr, sizeof(src_ipstr));
-                inet_ntop(AF_INET6, &socks5ctx->key_ipport.ip.ip6, dst_ipstr, sizeof(dst_ipstr));
-            }
-            LOGINF("[udp_socks5_recv_udpmessage_cb] %s tproxy context: %s#%hu -> %s#%hu",
-                   is_new_ctx ? "new" : "reuse",
-                   src_ipstr, ntohs(fromipport.port), dst_ipstr, ntohs(socks5ctx->key_ipport.port));
         }
 
         /* Prepare destination address */
