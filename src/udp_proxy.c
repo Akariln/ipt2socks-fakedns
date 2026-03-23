@@ -405,9 +405,7 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
                 }
             }
         } else {
-            IF_VERBOSE {
-                LOGINF("[handle_udp_socket_msg] new main context created (RealIP)");
-            }
+            LOGINF("[handle_udp_socket_msg] new main context created (RealIP)");
 
             context->is_forked = false;
             del_context = udp_socks5ctx_add(&g_udp_socks5ctx_table, context);
@@ -1173,9 +1171,9 @@ static void gc_sweep_cb(evloop_t *evloop, struct ev_watcher *watcher __attribute
             }
         }
     }
-    IF_VERBOSE { if (evicted > 0) {
-    LOGINF("[gc_sweep_cb] main table evicted: %d", evicted);
-    }}
+    if (evicted > 0) {
+        LOGINF("[gc_sweep_cb] main table evicted: %d", evicted);
+    }
 
     evicted = 0;
     {
@@ -1187,9 +1185,9 @@ static void gc_sweep_cb(evloop_t *evloop, struct ev_watcher *watcher __attribute
             }
         }
     }
-    IF_VERBOSE { if (evicted > 0) {
-    LOGINF("[gc_sweep_cb] fork table evicted: %d", evicted);
-    }}
+    if (evicted > 0) {
+        LOGINF("[gc_sweep_cb] fork table evicted: %d", evicted);
+    }
 
     evicted = 0;
     {
@@ -1201,9 +1199,9 @@ static void gc_sweep_cb(evloop_t *evloop, struct ev_watcher *watcher __attribute
             }
         }
     }
-    IF_VERBOSE { if (evicted > 0) {
-    LOGINF("[gc_sweep_cb] tproxy table evicted: %d", evicted);
-    }}
+    if (evicted > 0) {
+        LOGINF("[gc_sweep_cb] tproxy table evicted: %d", evicted);
+    }
 }
 
 /* ── GC: init / stop (called once per thread) ──────────────────────────── */

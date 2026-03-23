@@ -455,9 +455,7 @@ static void tcp_stream_payload_forward_cb(evloop_t *evloop, struct ev_watcher *w
             goto DO_WRITE; // EAGAIN
         }
         if (nrecv == 0) {
-            IF_VERBOSE {
-                LOGINF("[tcp_stream_payload_forward_cb] recv FIN from %s stream", self_is_client ? "client" : "socks5");
-            }
+            LOGINF("[tcp_stream_payload_forward_cb] recv FIN from %s stream", self_is_client ? "client" : "socks5");
             *self_eof = true;
             int new_events = self_watcher->events & ~EV_READ;
             ev_io_stop(evloop, self_watcher);
@@ -545,9 +543,7 @@ DO_WRITE:
     }
 
     if (context->client_eof && context->socks5_eof && context->fwd.client_pending == 0 && context->fwd.socks5_pending == 0) {
-        IF_VERBOSE {
-            LOGINF("[tcp_stream_payload_forward_cb] both streams are EOF and pipes are empty, release ctx");
-        }
+        LOGINF("[tcp_stream_payload_forward_cb] both streams are EOF and pipes are empty, release ctx");
         tcp_context_release(evloop, context, false);
     }
 }
