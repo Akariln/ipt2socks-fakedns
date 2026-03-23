@@ -44,16 +44,13 @@ static void gc_release_socks5ctx(evloop_t *evloop, udp_socks5ctx_t *context);
 static void gc_release_tproxyctx(evloop_t *evloop, udp_tproxyctx_t *context);
 static void gc_sweep_cb(evloop_t *evloop, struct ev_watcher *watcher, int revents);
 static inline void udp_socks5ctx_release(evloop_t *evloop, udp_socks5ctx_t *context);
+static void destroy_socks5ctx(evloop_t *evloop, udp_socks5ctx_t *context);
+static void destroy_tproxyctx(evloop_t *evloop, udp_tproxyctx_t *context);
 
-/* Atomically refresh last_active and reorder ctx to LRU tail.
- * Must be used for every liveness update; never assign last_active alone. */
+/* Refresh last_active timestamp.  GC and eviction scan this field
+ * directly — no hash-table reordering needed on the hot path. */
 static inline void udp_socks5ctx_keepalive(evloop_t *evloop, udp_socks5ctx_t *ctx) {
     ctx->last_active = ev_now(evloop);
-    if (ctx->is_forked) {
-        udp_socks5ctx_touch_fork(&g_udp_fork_table, ctx);
-    } else {
-        udp_socks5ctx_touch_main(&g_udp_socks5ctx_table, ctx);
-    }
 }
 
 void udp_tproxy_recvmsg_cb(evloop_t *evloop, struct ev_watcher *watcher, int revents __attribute__((unused))) {
@@ -161,9 +158,7 @@ static char *build_socks5_udp_header(char *payload_start, const char *fake_domai
 }
 
 static inline void build_fork_key(udp_fork_key_t *fk, const ip_port_t *client, const skaddr6_t *skaddr, bool isipv4) {
-    *fk = (udp_fork_key_t) {
-        0
-    };
+    memset(fk, 0, sizeof(*fk));
     fk->client_ipport = *client;
     fk->target_is_ipv4 = isipv4;
     if (isipv4) {
@@ -204,7 +199,8 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
         LOGINF("[handle_udp_socket_msg] recv from %s#%hu, nrecv:%zd", ipstr, portno, nrecv);
     }
 
-    ip_port_t key_ipport = {0};
+    ip_port_t key_ipport;
+    memset(&key_ipport, 0, sizeof(key_ipport));
     if (isipv4) {
         key_ipport.ip.ip4 = ((skaddr4_t *)&skaddr)->sin_addr.s_addr;
         key_ipport.port = ((skaddr4_t *)&skaddr)->sin_port;
@@ -283,16 +279,10 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
         udp_socks5ctx_t *main_ctx = udp_socks5ctx_find(&g_udp_socks5ctx_table, &key_ipport);
 
         if (main_ctx) {
-            /* Check for collisions that require forking:
-             * 1. Protocol family mismatch (IPv4 vs IPv6)
-             * 2. Type mismatch (FakeDNS session occupying main slot — only possible
-             *    when OPT_ENABLE_FAKEDNS; skip the check otherwise)
-             */
-            if (main_ctx->dest_is_ipv4 != isipv4 ||
-                    ((g_options & OPT_ENABLE_FAKEDNS) && main_ctx->is_fakedns)) {
-                /* Protocol mismatch (e.g. client used same port for IPv4 and IPv6 dest)
-                 * OR Type mismatch (FakeDNS session occupying main slot).
-                 * Sync last_active and bump main_ctx to MRU tail. */
+            /* Check for protocol family mismatch (e.g. client used same port
+             * for IPv4 and IPv6 destinations). FakeDNS sessions never enter
+             * the Main Table (always fork), so no type-mismatch check needed. */
+            if (main_ctx->dest_is_ipv4 != isipv4) {
                 udp_socks5ctx_keepalive(evloop, main_ctx);
                 force_fork = true;
             } else {
@@ -424,8 +414,8 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
         }
 
         if (del_context) {
-            LOGINF("[handle_udp_socket_msg] socks5ctx table full, evicting LRU entry");
-            gc_release_socks5ctx(evloop, del_context);
+            LOGINF("[handle_udp_socket_msg] socks5ctx table full, evicting least active entry");
+            destroy_socks5ctx(evloop, del_context);
         }
         return;
     }
@@ -868,6 +858,12 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, struct ev_watcher *w
     } batch_sends[UDP_BATCH_SIZE];
     int send_count = 0;
 
+    /* Deferred eviction queue: tproxyctx_add() may evict entries that are
+     * still referenced by earlier batch_sends[].ctx pointers.  Collect
+     * victims here and release them AFTER sendmmsg completes. */
+    udp_tproxyctx_t *deferred_evict[UDP_BATCH_SIZE];
+    int deferred_evict_count = 0;
+
     /* socks5ctx: single context per watcher. Update timestamp once per batch. */
     udp_socks5ctx_keepalive(evloop, socks5ctx);
 
@@ -901,7 +897,8 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, struct ev_watcher *w
         }
 
         /* Determine source (bind) address */
-        ip_port_t fromipport = {0};
+        ip_port_t fromipport;
+        memset(&fromipport, 0, sizeof(fromipport));
         bool dest_isipv4;
 
         if (socks5ctx->is_fakedns) {
@@ -922,10 +919,11 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, struct ev_watcher *w
             }
         }
 
-        /* Get or create tproxy context (GET: immediate LRU bump) */
-        udp_tproxyctx_t *tproxyctx = udp_tproxyctx_get(&g_udp_tproxyctx_table, &fromipport);
+        /* Get or create tproxy context */
+        udp_tproxyctx_t *tproxyctx = udp_tproxyctx_find(&g_udp_tproxyctx_table, &fromipport);
         if (!tproxyctx) {
-            skaddr6_t fromskaddr = {0};
+            skaddr6_t fromskaddr;
+            memset(&fromskaddr, 0, sizeof(fromskaddr));
             if (dest_isipv4) {
                 skaddr4_t *addr = (void *)&fromskaddr;
                 addr->sin_family = AF_INET;
@@ -960,8 +958,8 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, struct ev_watcher *w
             tproxyctx->last_active = ev_now(evloop);
             udp_tproxyctx_t *del_context = udp_tproxyctx_add(&g_udp_tproxyctx_table, tproxyctx);
             if (del_context) {
-                LOGINF("[udp_socks5_recv_udpmessage_cb] tproxyctx table full, evicting LRU entry");
-                gc_release_tproxyctx(evloop, del_context);
+                LOGINF("[udp_socks5_recv_udpmessage_cb] tproxyctx table full, deferring eviction");
+                deferred_evict[deferred_evict_count++] = del_context;
             }
         } else {
             tproxyctx->last_active = ev_now(evloop);
@@ -1090,18 +1088,21 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, struct ev_watcher *w
             }
         }
     }
+
+    /* Flush deferred evictions now that all sendmmsg calls are done.
+     * Victims were already removed from the hash table by LRU_DEFINE_ADD,
+     * so only destroy (close fd + return to pool) is needed. */
+    for (int i = 0; i < deferred_evict_count; i++) {
+        destroy_tproxyctx(evloop, deferred_evict[i]);
+    }
 }
 
-/* ── GC: release helpers ────────────────────────────────────────────────── */
+/* ── Release helpers ───────────────────────────────────────────────────── */
 
-static void gc_release_socks5ctx(evloop_t *evloop, udp_socks5ctx_t *context) {
+/* destroy_*: release resources + return to pool.  Caller must have already
+ * removed the entry from its hash table (via _del or LRU_DEFINE_ADD). */
 
-    if (context->is_forked) {
-        udp_socks5ctx_del(&g_udp_fork_table, context);
-    } else {
-        udp_socks5ctx_del(&g_udp_socks5ctx_table, context);
-    }
-
+static void destroy_socks5ctx(evloop_t *evloop, udp_socks5ctx_t *context) {
     ev_io_stop(evloop, &context->tcp_watcher);
     close(context->tcp_watcher.fd);
 
@@ -1122,10 +1123,26 @@ static void gc_release_socks5ctx(evloop_t *evloop, udp_socks5ctx_t *context) {
     mempool_free_sized(g_udp_context_pool, context, sizeof(*context));
 }
 
-static void gc_release_tproxyctx(evloop_t *evloop __attribute__((unused)), udp_tproxyctx_t *context) {
-    udp_tproxyctx_del(&g_udp_tproxyctx_table, context);
+static void destroy_tproxyctx(evloop_t *evloop __attribute__((unused)), udp_tproxyctx_t *context) {
     close(context->udp_sockfd);
     mempool_free_sized(g_udp_tproxy_pool, context, sizeof(*context));
+}
+
+/* gc_release_*: remove from hash table + destroy.
+ * Used by GC sweep and manual release paths where the entry is still in the table. */
+
+static void gc_release_socks5ctx(evloop_t *evloop, udp_socks5ctx_t *context) {
+    if (context->is_forked) {
+        udp_socks5ctx_del(&g_udp_fork_table, context);
+    } else {
+        udp_socks5ctx_del(&g_udp_socks5ctx_table, context);
+    }
+    destroy_socks5ctx(evloop, context);
+}
+
+static void gc_release_tproxyctx(evloop_t *evloop, udp_tproxyctx_t *context) {
+    udp_tproxyctx_del(&g_udp_tproxyctx_table, context);
+    destroy_tproxyctx(evloop, context);
 }
 
 /* ── GC: sweep callback ─────────────────────────────────────────────────── */
@@ -1143,8 +1160,9 @@ static void gc_sweep_cb(evloop_t *evloop, struct ev_watcher *watcher __attribute
                                : 10.0;
     int evicted;
 
-    /* LRU order ≡ last_active order: every LRU bump (GET or touch) synchronously
-     * updates last_active, so iterating oldest→newest allows O(1) early break. */
+    /* Tables are not kept in LRU order — scan all entries and evict any
+     * that have exceeded the idle timeout.  Capacity is bounded by uint16_t,
+     * so a full O(n) scan every GC_INTERVAL_SEC is negligible. */
     evicted = 0;
     {
         udp_socks5ctx_t *cur, *tmp;
@@ -1152,8 +1170,6 @@ static void gc_sweep_cb(evloop_t *evloop, struct ev_watcher *watcher __attribute
             if ((now - cur->last_active) >= idle_timeout) {
                 gc_release_socks5ctx(evloop, cur);
                 evicted++;
-            } else {
-                break;
             }
         }
     }
@@ -1168,8 +1184,6 @@ static void gc_sweep_cb(evloop_t *evloop, struct ev_watcher *watcher __attribute
             if ((now - cur->last_active) >= idle_timeout) {
                 gc_release_socks5ctx(evloop, cur);
                 evicted++;
-            } else {
-                break;
             }
         }
     }
@@ -1184,8 +1198,6 @@ static void gc_sweep_cb(evloop_t *evloop, struct ev_watcher *watcher __attribute
             if ((now - cur->last_active) >= tproxy_timeout) {
                 gc_release_tproxyctx(evloop, cur);
                 evicted++;
-            } else {
-                break; /* O(1) early break */
             }
         }
     }

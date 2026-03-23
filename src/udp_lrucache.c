@@ -47,10 +47,7 @@ void udp_lrucache_set_maxsize(uint16_t base_size) {
 
 LRU_DEFINE_ADD(udp_socks5ctx_add,
                udp_socks5ctx_t, key_ipport,
-               udp_lrucache_get_main_maxsize())
-
-LRU_DEFINE_GET(udp_socks5ctx_get,
-               udp_socks5ctx_t, ip_port_t, key_ipport)
+               udp_lrucache_get_main_maxsize(), last_active)
 
 LRU_DEFINE_FIND(udp_socks5ctx_find,
                 udp_socks5ctx_t, ip_port_t)
@@ -64,10 +61,7 @@ LRU_DEFINE_DEL(udp_socks5ctx_del,
 
 LRU_DEFINE_ADD(udp_socks5ctx_fork_add,
                udp_socks5ctx_t, fork_key,
-               udp_lrucache_get_fork_maxsize())
-
-LRU_DEFINE_GET(udp_socks5ctx_fork_get,
-               udp_socks5ctx_t, udp_fork_key_t, fork_key)
+               udp_lrucache_get_fork_maxsize(), last_active)
 
 LRU_DEFINE_FIND(udp_socks5ctx_fork_find,
                 udp_socks5ctx_t, udp_fork_key_t)
@@ -80,25 +74,13 @@ LRU_DEFINE_FIND(udp_socks5ctx_fork_find,
 
 LRU_DEFINE_ADD(udp_tproxyctx_add,
                udp_tproxyctx_t, key_ipport,
-               udp_lrucache_get_tproxy_maxsize())
+               udp_lrucache_get_tproxy_maxsize(), last_active)
 
-LRU_DEFINE_GET(udp_tproxyctx_get,
-               udp_tproxyctx_t, ip_port_t, key_ipport)
+LRU_DEFINE_FIND(udp_tproxyctx_find,
+                udp_tproxyctx_t, ip_port_t)
 
 LRU_DEFINE_DEL(udp_tproxyctx_del,
                udp_tproxyctx_t)
-
-/* ════════════════════════════════════════════════════════════════════════
- * Touch / Bump  (LRU_DEFINE_TOUCH)
- *
- * Each instantiation covers one key field.
- *
- *   Main Table:  udp_socks5ctx_touch_main  (uses key_ipport)
- *   Fork Table:  udp_socks5ctx_touch_fork  (uses fork_key)
- * ════════════════════════════════════════════════════════════════════════ */
-
-LRU_DEFINE_TOUCH(udp_socks5ctx_touch_main, udp_socks5ctx_t, key_ipport)
-LRU_DEFINE_TOUCH(udp_socks5ctx_touch_fork, udp_socks5ctx_t, fork_key)
 
 /* ════════════════════════════════════════════════════════════════════════
  * Clear All  (LRU_DEFINE_CLEAR)

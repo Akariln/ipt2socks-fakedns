@@ -6,16 +6,15 @@
  *
  * It provides:
  *   1. MYLRU_HASH_* wrappers around uthash (ADD / GET / DEL / CNT / FOR).
- *   2. Six LRU macro templates that callers instantiate once, in exactly
+ *   2. Four macro templates that callers instantiate once, in exactly
  *      one translation unit, to generate typed cache functions:
- *        LRU_DEFINE_ADD    — insert, evict LRU if over capacity
- *        LRU_DEFINE_GET    — lookup + bump to MRU end
- *        LRU_DEFINE_FIND   — pure lookup, no LRU bump
+ *        LRU_DEFINE_ADD    — insert; evict least-recently-active if over capacity
+ *        LRU_DEFINE_FIND   — pure lookup
  *        LRU_DEFINE_DEL    — unconditional removal
- *        LRU_DEFINE_TOUCH  — bump an existing entry to the MRU end (Touch)
  *        LRU_DEFINE_CLEAR  — iterate and invoke a callback on all entries
  * Requirements on the caller's struct:
  *   - must contain a field  `myhash_hh hh`  (the uthash bookkeeping handle)
+ *   - must contain a timestamp field for LRU_DEFINE_ADD eviction
  *   - key field(s) must be plain value types (no pointers-into-struct needed)
  * ──────────────────────────────────────────────────────────────────────── */
 
@@ -23,7 +22,7 @@
 #include <stdint.h>
 
 #include "xxhash.h"
-#define HASH_FUNCTION(key, len, hashv) { (hashv) = XXH32((key), (len), 0); }
+#define HASH_FUNCTION(key, len, hashv) { (hashv) = (unsigned)XXH3_64bits((key), (len)); }
 #include "uthash.h"
 
 /* ── uthash handle typedef (keeps domain structs clean) ── */
@@ -47,35 +46,21 @@ typedef UT_hash_handle myhash_hh;
     HASH_ITER(hh, (head), (cur), (tmp))
 
 /* ════════════════════════════════════════════════════════════════════════
- * Generic LRU macro templates
+ * Generic cache macro templates
  *
  * Instantiate each macro exactly once per (func_name, type) pair,
  * in a single .c file. Multiple inclusions of these macros in different
  * translation units will produce duplicate-symbol linker errors.
  *
- * LRU_DEFINE_ADD   — insert entry; if over capacity, returns the oldest
- *                    (LRU) entry so the caller can invoke its teardown
- *                    callback. The caller is responsible for MYLRU_HASH_DEL
- *                    + free on that returned pointer.
+ * LRU_DEFINE_ADD   — insert entry; if over capacity, removes the entry
+ *                    with the smallest ts_field (least recently active)
+ *                    from the hash table and returns it.  The caller is
+ *                    responsible only for resource teardown + free on
+ *                    that returned pointer (do NOT call _del again).
  *
- * LRU_DEFINE_GET   — lookup by key; on hit, re-inserts at tail (MRU end).
+ * LRU_DEFINE_FIND  — pure lookup; returns NULL on miss.
  *
  * LRU_DEFINE_DEL   — unconditional removal from the hash table.
- *
- * LRU_DEFINE_TOUCH — detach an already-inserted entry and re-insert it
- *                    at the MRU end (touch/bump).
- *
- *   Motivation: When an existing session receives new packets, we must reset
- *   its LRU eviction timer. Rather than doing a useless hash lookup (GET),
- *   we already have the pointer. We simply DEL and ADD it back.
- *   Because the ADD macro needs to know which key field to hash on, we
- *   instantiate one TOUCH function per key field:
- *
- *     LRU_DEFINE_TOUCH(udp_socks5ctx_touch_main, udp_socks5ctx_t, key_ipport)
- *     LRU_DEFINE_TOUCH(udp_socks5ctx_touch_fork, udp_socks5ctx_t, fork_key)
- *
- *   The compiler ensures we pass the correct object type to the right table's
- *   touch function.
  *
  * LRU_DEFINE_CLEAR — iterate over all entries and invoke a caller-supplied
  *                    teardown callback on each.
@@ -91,32 +76,27 @@ typedef UT_hash_handle myhash_hh;
  *
  *   Motivation: Abstract away `HASH_ITER` and `hh` so that business logic
  *   files never need to interact with uthash macros directly.
+ *
+ * Design note — no per-packet LRU reordering:
+ *   Hot-path callers only update the entry's ts_field (a plain timestamp
+ *   write).  Eviction and GC pay O(n) scans over small bounded tables
+ *   (n ≤ UINT16_MAX) instead of forcing a hash DEL+ADD on every packet.
  * ════════════════════════════════════════════════════════════════════════ */
 
-#define LRU_DEFINE_ADD(func_name, type, key_field, maxsize_expr)             \
+#define LRU_DEFINE_ADD(func_name, type, key_field, maxsize_expr, ts_field)   \
 type* func_name(type **cache, type *entry) {                                 \
     MYLRU_HASH_ADD(*cache, entry, &entry->key_field, sizeof(entry->key_field));  \
     if (MYLRU_HASH_CNT(*cache) > (maxsize_expr)) {                               \
-        type *cur_ = NULL, *tmp_ = NULL;                                     \
+        type *cur_ = NULL, *tmp_ = NULL, *victim_ = NULL;                   \
         MYLRU_HASH_FOR(*cache, cur_, tmp_) {                                     \
-            /* Return the oldest entry; caller owns teardown + DEL.        */ \
-            /* Do NOT call MYLRU_HASH_DEL here — the timeout callback does it. */ \
-            return cur_;                                                     \
+            if (cur_ == entry) continue; /* never evict the just-added entry */ \
+            if (!victim_ || cur_->ts_field < victim_->ts_field)             \
+                victim_ = cur_;                                              \
         }                                                                    \
+        if (victim_) MYLRU_HASH_DEL(*cache, victim_);                       \
+        return victim_;                                                      \
     }                                                                        \
     return NULL;                                                             \
-}
-
-#define LRU_DEFINE_GET(func_name, type, key_type, key_field)                 \
-type* func_name(type **cache, const key_type *keyptr) {                      \
-    type *entry = NULL;                                                      \
-    MYLRU_HASH_GET(*cache, entry, keyptr, sizeof(key_type));                     \
-    if (entry) {                                                             \
-        /* Bump to MRU end */                                                \
-        MYLRU_HASH_DEL(*cache, entry);                                           \
-        MYLRU_HASH_ADD(*cache, entry, &entry->key_field, sizeof(entry->key_field)); \
-    }                                                                        \
-    return entry;                                                            \
 }
 
 #define LRU_DEFINE_FIND(func_name, type, key_type)                           \
@@ -129,12 +109,6 @@ type* func_name(type **cache, const key_type *keyptr) {                      \
 #define LRU_DEFINE_DEL(func_name, type)                                      \
 void func_name(type **cache, type *entry) {                                  \
     MYLRU_HASH_DEL(*cache, entry);                                               \
-}
-
-#define LRU_DEFINE_TOUCH(func_name, type, key_field)                         \
-void func_name(type **cache, type *entry) {                                  \
-    MYLRU_HASH_DEL(*cache, entry);                                               \
-    MYLRU_HASH_ADD(*cache, entry, &entry->key_field, sizeof(entry->key_field));  \
 }
 
 #define LRU_DEFINE_CLEAR(func_name, type)                                    \
