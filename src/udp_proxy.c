@@ -157,6 +157,29 @@ static char *build_socks5_udp_header(char *payload_start, const char *fake_domai
     return header_start;
 }
 
+#ifdef ENABLE_SENDTO_LOG
+static inline void log_udp_transfer(const char *funcname, const char *action,
+                                    const ip_port_t *src, const ip_port_t *dst,
+                                    bool is_ipv4, const char *unit, int val) {
+    char src_ipstr[IP6STRLEN];
+    char dst_ipstr[IP6STRLEN];
+
+    if (is_ipv4) {
+        inet_ntop(AF_INET, &src->ip.ip4, src_ipstr, sizeof(src_ipstr));
+        inet_ntop(AF_INET, &dst->ip.ip4, dst_ipstr, sizeof(dst_ipstr));
+    } else {
+        inet_ntop(AF_INET6, &src->ip.ip6, src_ipstr, sizeof(src_ipstr));
+        inet_ntop(AF_INET6, &dst->ip.ip6, dst_ipstr, sizeof(dst_ipstr));
+    }
+
+    LOGINF("[%s] %s: %s#%hu -> %s#%hu, %s:%d",
+           funcname, action,
+           src_ipstr, ntohs(src->port),
+           dst_ipstr, ntohs(dst->port),
+           unit, val);
+}
+#endif
+
 static inline void build_fork_key(udp_fork_key_t *fk, const ip_port_t *client, const skaddr6_t *skaddr, bool isipv4) {
     memset(fk, 0, sizeof(*fk));
     fk->client_ipport = *client;
@@ -264,12 +287,10 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
         if (!context) {
             /* Not found, new session needed. Force fork to ensure it goes to Fork Table on creation */
             force_fork = true;
-            IF_VERBOSE {
-                LOGINF("[handle_udp_socket_msg] new FakeDNS session (will fork): %s -> %s", ipstr, fake_domain);
-            }
         } else {
             IF_VERBOSE {
-                LOGINF("[handle_udp_socket_msg] reuse fork context (FakeDNS): %s -> %s", ipstr, fake_domain);
+                portno_t target_port = isipv4 ? ((skaddr4_t *)&skaddr)->sin_port : skaddr.sin6_port;
+                LOGINF("[handle_udp_socket_msg] reuse fork context (FakeDNS): %s#%hu -> %s#%hu", ipstr, portno, fake_domain, ntohs(target_port));
             }
         }
     } else {
@@ -292,7 +313,7 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
                     char target_ipstr[IP6STRLEN];
                     portno_t target_port;
                     parse_socket_addr(&skaddr, target_ipstr, &target_port);
-                    LOGINF("[handle_udp_socket_msg] reuse main context (RealIP): %s -> %s#%d", ipstr, target_ipstr, target_port);
+                    LOGINF("[handle_udp_socket_msg] reuse main context (RealIP): %s#%hu -> %s#%hu", ipstr, portno, target_ipstr, target_port);
                 }
             }
         }
@@ -305,7 +326,10 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
             context = udp_socks5ctx_fork_find(&g_udp_fork_table, &fork_key);
             if (context) {
                 IF_VERBOSE {
-                    LOGINF("[handle_udp_socket_msg] reuse fork context (RealIP): %s -> RealIP", ipstr);
+                    char target_ipstr[IP6STRLEN];
+                    portno_t target_port;
+                    parse_socket_addr(&skaddr, target_ipstr, &target_port);
+                    LOGINF("[handle_udp_socket_msg] reuse fork context (RealIP): %s#%hu -> %s#%hu", ipstr, portno, target_ipstr, target_port);
                 }
             }
             /* If still NULL, creation logic below will use force_fork to decide which table */
@@ -344,9 +368,13 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
         /* Save original destination and protocol family */
         context->dest_is_ipv4 = isipv4;
         context->is_fakedns = (fake_domain != NULL);
-        if (fake_domain) {
-            /* orig_dstaddr is only consumed in the response path when is_fakedns is set,
-             * because the SOCKS5 UDP relay rewrites the source address. */
+
+        /* orig_dstaddr is consumed in the response path when is_fakedns is set.
+         * When ENABLE_SENDTO_LOG is defined it is also needed for dual-IP logging. */
+#ifndef ENABLE_SENDTO_LOG
+        if (fake_domain)
+#endif
+        {
             if (isipv4) {
                 context->orig_dstaddr.ip.ip4 = ((skaddr4_t *)&skaddr)->sin_addr.s_addr;
                 context->orig_dstaddr.port = ((skaddr4_t *)&skaddr)->sin_port;
@@ -399,13 +427,22 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
             del_context = udp_socks5ctx_fork_add(&g_udp_fork_table, context);
             IF_VERBOSE {
                 if (fake_domain) {
-                    LOGINF("[handle_udp_socket_msg] new fork context created (FakeDNS): %s -> %s", ipstr, fake_domain);
+                    portno_t target_port = isipv4 ? ((skaddr4_t *)&skaddr)->sin_port : skaddr.sin6_port;
+                    LOGINF("[handle_udp_socket_msg] new fork context (FakeDNS): %s#%hu -> %s#%hu", ipstr, portno, fake_domain, ntohs(target_port));
                 } else {
-                    LOGINF("[handle_udp_socket_msg] new fork context created (RealIP Collision)");
+                    char target_ipstr[IP6STRLEN];
+                    portno_t target_port;
+                    parse_socket_addr(&skaddr, target_ipstr, &target_port);
+                    LOGINF("[handle_udp_socket_msg] new fork context (RealIP): %s#%hu -> %s#%hu", ipstr, portno, target_ipstr, target_port);
                 }
             }
         } else {
-            LOGINF("[handle_udp_socket_msg] new main context created (RealIP)");
+            IF_VERBOSE {
+                char target_ipstr[IP6STRLEN];
+                portno_t target_port;
+                parse_socket_addr(&skaddr, target_ipstr, &target_port);
+                LOGINF("[handle_udp_socket_msg] new main context (RealIP): %s#%hu -> %s#%hu", ipstr, portno, target_ipstr, target_port);
+            }
 
             context->is_forked = false;
             del_context = udp_socks5ctx_add(&g_udp_socks5ctx_table, context);
@@ -467,15 +504,11 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
         }
         return;
     }
-    IF_VERBOSE {
-        if (fake_domain) {
-            portno = ntohs(((skaddr4_t *)&skaddr)->sin_port);
-            LOGINF("[handle_udp_socket_msg] send to %s#%hu, nsend:%zd", fake_domain, portno, nsend);
-        } else {
-            parse_socket_addr(&skaddr, ipstr, &portno);
-            LOGINF("[handle_udp_socket_msg] send to %s#%hu, nsend:%zd", ipstr, portno, nsend);
-        }
-    }
+#ifdef ENABLE_SENDTO_LOG
+    log_udp_transfer("handle_udp_socket_msg", "send",
+                     &context->key_ipport, &context->orig_dstaddr,
+                     context->dest_is_ipv4, "nsend", (int)nsend);
+#endif
 }
 
 static inline udp_socks5ctx_t* get_udpsk5ctx_by_tcp(evio_t *tcp_watcher) {
@@ -720,37 +753,63 @@ static void udp_socks5_recv_proxyresp_cb(evloop_t *evloop, struct ev_watcher *wa
         return;
     }
 
+    /* Drain pending queue via sendmmsg (single fd, no grouping needed).
+     * Build iovec/mmsghdr arrays from the linked list, send in one syscall,
+     * then free all nodes.  Queue depth is bounded by UDP_QUEUE_MAX_DEPTH. */
     udp_packet_queue_t *queue = &context->pending_queue;
-    udp_packet_node_t *curr = queue->head;
-    while (curr) {
-        ssize_t nsend = send(udp_sockfd, curr->data, curr->len, 0);
-        if (nsend < 0 || unlikely(g_verbose)) {
-            char log_addr[256];
-            portno_t portno;
-            uint8_t addrtype = ((socks5_udp4msg_t *)curr->data)->addrtype;
-            if (addrtype == SOCKS5_ADDRTYPE_IPV4) {
-                socks5_udp4msg_t *udp4msg = (void *)curr->data;
-                inet_ntop(AF_INET, &udp4msg->ipaddr4, log_addr, sizeof(log_addr));
-                portno = ntohs(udp4msg->portnum);
-            } else if (addrtype == SOCKS5_ADDRTYPE_DOMAIN) {
-                /* Domain format: extract domain and port for logging */
-                uint8_t *msg = curr->data;
-                uint8_t domain_len = msg[4];
-                memcpy(log_addr, msg + 5, domain_len);
-                log_addr[domain_len] = '\0';
-                memcpy(&portno, msg + 5 + domain_len, 2);
-                portno = ntohs(portno);
-            } else {
-                socks5_udp6msg_t *udp6msg = (void *)curr->data;
-                inet_ntop(AF_INET6, &udp6msg->ipaddr6, log_addr, sizeof(log_addr));
-                portno = ntohs(udp6msg->portnum);
+    struct mmsghdr drain_msgs[UDP_QUEUE_MAX_DEPTH];
+    struct iovec drain_iovs[UDP_QUEUE_MAX_DEPTH];
+    int drain_count = 0;
+
+    for (udp_packet_node_t *curr = queue->head; curr && drain_count < UDP_QUEUE_MAX_DEPTH; curr = curr->next) {
+        drain_iovs[drain_count].iov_base               = curr->data;
+        drain_iovs[drain_count].iov_len                = curr->len;
+        drain_msgs[drain_count].msg_hdr.msg_name       = NULL;
+        drain_msgs[drain_count].msg_hdr.msg_namelen    = 0;
+        drain_msgs[drain_count].msg_hdr.msg_iov        = &drain_iovs[drain_count];
+        drain_msgs[drain_count].msg_hdr.msg_iovlen     = 1;
+        drain_msgs[drain_count].msg_hdr.msg_control    = NULL;
+        drain_msgs[drain_count].msg_hdr.msg_controllen = 0;
+        drain_count++;
+    }
+
+    if (drain_count > 0) {
+        int sent = sendmmsg(udp_sockfd, drain_msgs, (unsigned int)drain_count, 0);
+        if (sent < 0) {
+            if (errno != EAGAIN && errno != EWOULDBLOCK) {
+                LOGERR("[udp_socks5_recv_proxyresp_cb] sendmmsg drain failed: %s", strerror(errno));
             }
-            if (nsend < 0) {
-                LOGERR("[udp_socks5_recv_proxyresp_cb] send to %s#%hu: %s", log_addr, portno, strerror(errno));
-            } else {
-                LOGINF("[udp_socks5_recv_proxyresp_cb] send to %s#%hu, nsend:%zd", log_addr, portno, nsend);
+        } else {
+#ifdef ENABLE_SENDTO_LOG
+            log_udp_transfer("udp_socks5_recv_proxyresp_cb", "sendmmsg",
+                             &context->key_ipport, &context->orig_dstaddr,
+                             context->dest_is_ipv4, "npackets", sent);
+#endif
+            if (sent < drain_count) {
+                LOGWAR("[udp_socks5_recv_proxyresp_cb] partial drain %d/%d, using fallback", sent, drain_count);
+                for (int k = sent; k < drain_count; k++) {
+                    ssize_t n = send(udp_sockfd, drain_iovs[k].iov_base, drain_iovs[k].iov_len, 0);
+#ifdef ENABLE_SENDTO_LOG
+                    if (n > 0) {
+                        log_udp_transfer("udp_socks5_recv_proxyresp_cb", "send",
+                                         &context->key_ipport, &context->orig_dstaddr,
+                                         context->dest_is_ipv4, "nsend", (int)n);
+                    }
+#endif
+                    if (n < 0) {
+                        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                            /* System socket buffer is fully exhausted, impossible to send more in this run. */
+                            break;
+                        }
+                        LOGERR("[udp_socks5_recv_proxyresp_cb] fallback send failed: %s", strerror(errno));
+                    }
+                }
             }
         }
+    }
+
+    udp_packet_node_t *curr = queue->head;
+    while (curr) {
         udp_packet_node_t *next = curr->next;
         free(curr);
         curr = next;
@@ -789,21 +848,23 @@ static void udp_socks5_recv_tcpmessage_cb(evloop_t *evloop, struct ev_watcher *w
     }
 }
 
-static inline void sendmmsg_fallback(int sockfd, struct mmsghdr *msgs, int sent, int total) {
+static inline void sendmmsg_fallback(udp_socks5ctx_t *socks5ctx __attribute__((unused)), udp_tproxyctx_t *tproxy_ctx, struct mmsghdr *msgs, int sent, int total) {
     LOGWAR("[udp_socks5_recv_udpmessage_cb] partial send %d/%d, using fallback", sent, total);
     for (int k = sent; k < total; k++) {
         struct msghdr *hdr = &msgs[k].msg_hdr;
-        ssize_t n = sendto(sockfd, hdr->msg_iov[0].iov_base,
+        ssize_t n = sendto(tproxy_ctx->udp_sockfd, hdr->msg_iov[0].iov_base,
                            hdr->msg_iov[0].iov_len, 0, hdr->msg_name, hdr->msg_namelen);
 #ifdef ENABLE_SENDTO_LOG
         if (n > 0) {
-            char ipstr[IP6STRLEN];
-            portno_t portno;
-            parse_socket_addr((skaddr6_t *)hdr->msg_name, ipstr, &portno);
-            LOGINF("[udp_socks5_recv_udpmessage_cb] fallback sendto %s#%hu, nsend:%zd", ipstr, portno, n);
+            log_udp_transfer("udp_socks5_recv_udpmessage_cb", "send",
+                             &tproxy_ctx->key_ipport, &socks5ctx->key_ipport,
+                             socks5ctx->dest_is_ipv4, "nsend", (int)n);
         }
 #endif
-        if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+        if (n < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                break;
+            }
             LOGERR("[udp_socks5_recv_udpmessage_cb] fallback sendto failed: %s", strerror(errno));
         }
     }
@@ -919,6 +980,7 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, struct ev_watcher *w
 
         /* Get or create tproxy context */
         udp_tproxyctx_t *tproxyctx = udp_tproxyctx_find(&g_udp_tproxyctx_table, &fromipport);
+        bool is_new_ctx = !tproxyctx;
         if (!tproxyctx) {
             skaddr6_t fromskaddr;
             memset(&fromskaddr, 0, sizeof(fromskaddr));
@@ -961,6 +1023,21 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, struct ev_watcher *w
             }
         } else {
             tproxyctx->last_active = ev_now(evloop);
+        }
+
+        IF_VERBOSE {
+            char src_ipstr[IP6STRLEN];
+            char dst_ipstr[IP6STRLEN];
+            if (dest_isipv4) {
+                inet_ntop(AF_INET, &fromipport.ip.ip4, src_ipstr, sizeof(src_ipstr));
+                inet_ntop(AF_INET, &socks5ctx->key_ipport.ip.ip4, dst_ipstr, sizeof(dst_ipstr));
+            } else {
+                inet_ntop(AF_INET6, &fromipport.ip.ip6, src_ipstr, sizeof(src_ipstr));
+                inet_ntop(AF_INET6, &socks5ctx->key_ipport.ip.ip6, dst_ipstr, sizeof(dst_ipstr));
+            }
+            LOGINF("[udp_socks5_recv_udpmessage_cb] %s tproxy context: %s#%hu -> %s#%hu",
+                   is_new_ctx ? "new" : "reuse",
+                   src_ipstr, ntohs(fromipport.port), dst_ipstr, ntohs(socks5ctx->key_ipport.port));
         }
 
         /* Prepare destination address */
@@ -1014,21 +1091,17 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, struct ev_watcher *w
 
             int sent = sendmmsg(first_ctx->udp_sockfd, send_msgs, (unsigned int)send_count, 0);
             if (sent < 0) {
-                LOGERR("[udp_socks5_recv_udpmessage_cb] sendmmsg failed: %s", strerror(errno));
+                if (errno != EAGAIN && errno != EWOULDBLOCK) {
+                    LOGERR("[udp_socks5_recv_udpmessage_cb] sendmmsg failed: %s", strerror(errno));
+                }
             } else {
 #ifdef ENABLE_SENDTO_LOG
-                char ipstr[IP6STRLEN];
-                ip_port_t *client = &socks5ctx->key_ipport;
-                if (socks5ctx->dest_is_ipv4) {
-                    inet_ntop(AF_INET, &client->ip.ip4, ipstr, sizeof(ipstr));
-                } else {
-                    inet_ntop(AF_INET6, &client->ip.ip6, ipstr, sizeof(ipstr));
-                }
-                LOGINF("[udp_socks5_recv_udpmessage_cb] sendmmsg to %s#%hu: %d packets sent",
-                       ipstr, ntohs(client->port), sent);
+                log_udp_transfer("udp_socks5_recv_udpmessage_cb", "sendmmsg",
+                                 &first_ctx->key_ipport, &socks5ctx->key_ipport,
+                                 socks5ctx->dest_is_ipv4, "npackets", sent);
 #endif
                 if (sent < send_count) {
-                    sendmmsg_fallback(first_ctx->udp_sockfd, send_msgs, sent, send_count);
+                    sendmmsg_fallback(socks5ctx, first_ctx, send_msgs, sent, send_count);
                 }
             }
         } else {
@@ -1064,21 +1137,17 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, struct ev_watcher *w
 
                 int sent = sendmmsg(ctx->udp_sockfd, send_msgs, (unsigned int)group_count, 0);
                 if (sent < 0) {
-                    LOGERR("[udp_socks5_recv_udpmessage_cb] sendmmsg failed: %s", strerror(errno));
+                    if (errno != EAGAIN && errno != EWOULDBLOCK) {
+                        LOGERR("[udp_socks5_recv_udpmessage_cb] sendmmsg failed: %s", strerror(errno));
+                    }
                 } else {
 #ifdef ENABLE_SENDTO_LOG
-                    char ipstr[IP6STRLEN];
-                    ip_port_t *client = &socks5ctx->key_ipport;
-                    if (socks5ctx->dest_is_ipv4) {
-                        inet_ntop(AF_INET, &client->ip.ip4, ipstr, sizeof(ipstr));
-                    } else {
-                        inet_ntop(AF_INET6, &client->ip.ip6, ipstr, sizeof(ipstr));
-                    }
-                    LOGINF("[udp_socks5_recv_udpmessage_cb] sendmmsg to %s#%hu: %d packets sent",
-                           ipstr, ntohs(client->port), sent);
+                    log_udp_transfer("udp_socks5_recv_udpmessage_cb", "sendmmsg",
+                                     &ctx->key_ipport, &socks5ctx->key_ipport,
+                                     socks5ctx->dest_is_ipv4, "npackets", sent);
 #endif
                     if (sent < group_count) {
-                        sendmmsg_fallback(ctx->udp_sockfd, send_msgs, sent, group_count);
+                        sendmmsg_fallback(socks5ctx, ctx, send_msgs, sent, group_count);
                     }
                 }
 
