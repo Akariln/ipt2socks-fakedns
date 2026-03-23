@@ -9,7 +9,7 @@ SRCS = src/main.c src/ctx.c src/netutils.c src/socks5.c \
        src/udp_lrucache.c
 
 BUILD_MODE := release
-CPPFLAGS   := -D_GNU_SOURCE -DXXH_INLINE_ALL -MMD -MP -I./uthash -I./xxhash
+CPPFLAGS   := -D_GNU_SOURCE -DXXH_INLINE_ALL -MMD -MP -I./uthash -I./xxhash $(EXTRA_CPPFLAGS)
 CFLAGS     := -std=c99 -Wall -Wextra -Wvla -pthread -fno-strict-aliasing \
               -ffunction-sections -fdata-sections $(EXTRA_CFLAGS)
 LDFLAGS    := -pthread -Wl,--gc-sections $(EXTRA_LDFLAGS)
