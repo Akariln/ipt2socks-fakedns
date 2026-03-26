@@ -88,7 +88,7 @@ static inline void tcp_context_release(evloop_t *evloop, tcp_context_t *context,
         g_tcp_session_head = context->next;
     }
 
-    mempool_free_sized(g_tcp_context_pool, context, sizeof(tcp_context_t));
+    mempool_free_sized(g_tcp_context_pool, context, sizeof(*context));
 }
 
 void tcp_proxy_close_all_sessions(evloop_t *evloop) {
@@ -125,7 +125,7 @@ void tcp_tproxy_accept_cb(evloop_t *evloop, struct ev_watcher *watcher, int reve
     }
     IF_VERBOSE {
         parse_socket_addr(&skaddr, ipstr, &portno);
-        LOGINF("[tcp_tproxy_accept_cb] source socket address: %s#%hu", ipstr, portno);
+        LOGINF_RAW("[tcp_tproxy_accept_cb] source socket address: %s#%hu", ipstr, portno);
     }
 
     if (!get_tcp_orig_dstaddr(isipv4 ? AF_INET : AF_INET6, client_sockfd, &skaddr, !(g_options & OPT_TCP_USE_REDIRECT))) {
@@ -134,7 +134,7 @@ void tcp_tproxy_accept_cb(evloop_t *evloop, struct ev_watcher *watcher, int reve
     }
     IF_VERBOSE {
         parse_socket_addr(&skaddr, ipstr, &portno);
-        LOGINF("[tcp_tproxy_accept_cb] target socket address: %s#%hu", ipstr, portno);
+        LOGINF_RAW("[tcp_tproxy_accept_cb] target socket address: %s#%hu", ipstr, portno);
     }
 
     /* FakeDNS reverse lookup for domain resolution */
@@ -151,10 +151,10 @@ void tcp_tproxy_accept_cb(evloop_t *evloop, struct ev_watcher *watcher, int reve
             return;
         }
         IF_VERBOSE if (fake_domain) {
-            LOGINF("[tcp_tproxy_accept_cb] fakedns hit: %u.%u.%u.%u -> %s",
-                   ((uint8_t *)&target_ip)[0], ((uint8_t *)&target_ip)[1],
-                   ((uint8_t *)&target_ip)[2], ((uint8_t *)&target_ip)[3],
-                   fake_domain);
+            LOGINF_RAW("[tcp_tproxy_accept_cb] fakedns hit: %u.%u.%u.%u -> %s",
+                       ((uint8_t *)&target_ip)[0], ((uint8_t *)&target_ip)[1],
+                       ((uint8_t *)&target_ip)[2], ((uint8_t *)&target_ip)[3],
+                       fake_domain);
         }
     }
 
@@ -180,7 +180,7 @@ void tcp_tproxy_accept_cb(evloop_t *evloop, struct ev_watcher *watcher, int reve
         LOGINF("[tcp_tproxy_accept_cb] try to connect to %s#%hu ...", g_server_ipstr, g_server_portno);
     }
 
-    tcp_context_t *context = mempool_alloc_sized(g_tcp_context_pool, sizeof(tcp_context_t));
+    tcp_context_t *context = mempool_alloc_sized(g_tcp_context_pool, sizeof(*context));
     if (!context) {
         LOGERR("[tcp_tproxy_accept_cb] mempool_alloc failed");
         tcp_close_by_rst(client_sockfd);
@@ -315,7 +315,7 @@ static void tcp_socks5_recv_authresp_cb(evloop_t *evloop, struct ev_watcher *wat
     if (ret == 1) {
         ev_set_cb(socks5_watcher, g_socks5_usrpwd_requestlen ? tcp_socks5_recv_usrpwdresp_cb : tcp_socks5_recv_proxyresp_cb);
         if (!g_socks5_usrpwd_requestlen) {
-            context->hs.resp_expect = 5; // proxy response header prefix length
+            context->hs.resp_expect = SOCKS5_RESP_HEADER_PREFIX_LEN;
         }
     } else if (ret == 0) {
         ev_io_stop(evloop, socks5_watcher);
@@ -347,7 +347,7 @@ static void tcp_socks5_recv_usrpwdresp_cb(evloop_t *evloop, struct ev_watcher *w
     int ret = tcp_socks5_send_request("tcp_socks5_recv_usrpwdresp_cb", evloop, socks5_watcher, context->hs.req, context->hs.req_len);
     if (ret == 1) {
         ev_set_cb(socks5_watcher, tcp_socks5_recv_proxyresp_cb);
-        context->hs.resp_expect = 5; // proxy response header prefix length
+        context->hs.resp_expect = SOCKS5_RESP_HEADER_PREFIX_LEN;
     } else if (ret == 0) {
         ev_io_stop(evloop, socks5_watcher);
         ev_io_init(socks5_watcher, tcp_socks5_send_proxyreq_cb, socks5_watcher->fd, EV_WRITE);
@@ -364,7 +364,7 @@ static void tcp_socks5_send_proxyreq_cb(evloop_t *evloop, struct ev_watcher *wat
     ev_io_stop(evloop, socks5_watcher);
     ev_io_init(socks5_watcher, tcp_socks5_recv_proxyresp_cb, socks5_watcher->fd, EV_READ);
     ev_io_start(evloop, socks5_watcher);
-    context->hs.resp_expect = 5; // Read first 5 bytes (VER, REP, RSV, ATYP, LEN/IP1)
+    context->hs.resp_expect = SOCKS5_RESP_HEADER_PREFIX_LEN;
 }
 
 static void tcp_socks5_recv_proxyresp_cb(evloop_t *evloop, struct ev_watcher *watcher, int revents __attribute__((unused))) {
@@ -375,7 +375,7 @@ static void tcp_socks5_recv_proxyresp_cb(evloop_t *evloop, struct ev_watcher *wa
     }
 
     /* If we just read the first 5 bytes (Header prefix) */
-    if (context->hs.resp_expect == 5) {
+    if (context->hs.resp_expect == SOCKS5_RESP_HEADER_PREFIX_LEN) {
         uint8_t atype = ((socks5_resp_header_t *)context->hs.resp)->addrtype;
         size_t total_len;
 
@@ -389,9 +389,15 @@ static void tcp_socks5_recv_proxyresp_cb(evloop_t *evloop, struct ev_watcher *wa
             return;
         }
 
+        if (total_len > sizeof(context->hs.resp)) {
+            LOGERR("[tcp_socks5_recv_proxyresp_cb] response too large: %zu", total_len);
+            tcp_context_release(evloop, context, true);
+            return;
+        }
+
         /* Update length targets */
         context->hs.resp_expect = (uint32_t)total_len;
-        context->hs.io_offset = 5; /* We already have 5 bytes */
+        context->hs.io_offset = SOCKS5_RESP_HEADER_PREFIX_LEN;
 
         /* Attempt to read the rest immediately */
         if (tcp_socks5_recv_response("tcp_socks5_recv_proxyresp_cb", evloop, socks5_watcher, context->hs.resp, context->hs.resp_expect) != 1) {
@@ -442,7 +448,7 @@ static void tcp_stream_payload_forward_cb(evloop_t *evloop, struct ev_watcher *w
             if (errno != EAGAIN && errno != EWOULDBLOCK) {
                 if (errno == ECONNRESET) {
                     IF_VERBOSE {
-                        LOGINF("[tcp_stream_payload_forward_cb] recv from %s stream: %s, cascade RST", self_is_client ? "client" : "socks5", strerror(errno));
+                        LOGINF_RAW("[tcp_stream_payload_forward_cb] recv from %s stream: %s, cascade RST", self_is_client ? "client" : "socks5", strerror(errno));
                     }
                 } else {
                     IF_VERBOSE {
@@ -473,7 +479,7 @@ static void tcp_stream_payload_forward_cb(evloop_t *evloop, struct ev_watcher *w
                 if (errno != EAGAIN && errno != EWOULDBLOCK) {
                     if (errno == EPIPE || errno == ECONNRESET) {
                         IF_VERBOSE {
-                            LOGINF("[tcp_stream_payload_forward_cb] send to %s stream: %s, cascade RST", self_is_client ? "socks5" : "client", strerror(errno));
+                            LOGINF_RAW("[tcp_stream_payload_forward_cb] send to %s stream: %s, cascade RST", self_is_client ? "socks5" : "client", strerror(errno));
                         }
                     } else {
                         LOGERR("[tcp_stream_payload_forward_cb] send to %s stream: %s", self_is_client ? "socks5" : "client", strerror(errno));
@@ -510,7 +516,7 @@ DO_WRITE:
             if (errno != EAGAIN && errno != EWOULDBLOCK) {
                 if (errno == EPIPE || errno == ECONNRESET) {
                     IF_VERBOSE {
-                        LOGINF("[tcp_stream_payload_forward_cb] send to %s stream: %s, cascade RST", self_is_client ? "client" : "socks5", strerror(errno));
+                        LOGINF_RAW("[tcp_stream_payload_forward_cb] send to %s stream: %s, cascade RST", self_is_client ? "client" : "socks5", strerror(errno));
                     }
                 } else {
                     LOGERR("[tcp_stream_payload_forward_cb] send to %s stream: %s", self_is_client ? "client" : "socks5", strerror(errno));

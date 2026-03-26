@@ -22,6 +22,8 @@
 #define UDP_CTRLMESG_BUFSIZ 64
 #define UDP_DATAGRAM_MAXSIZ 65507 /* 65535 - iphdr(20) - udphdr(8) */
 
+#define SOCKS5_RESP_HEADER_PREFIX_LEN 5 /* VER(1) + REP(1) + RSV(1) + ATYP(1) + first-addr-byte(1) */
+
 typedef uint32_t ipaddr4_t;
 typedef uint8_t  ipaddr6_t[16];
 

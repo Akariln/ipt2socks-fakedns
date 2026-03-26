@@ -28,6 +28,9 @@ void log_print(log_level_t level, const char *fmt, ...) __attribute__((format(pr
         } \
     } while (0)
 
+/* No verbose guard — use ONLY inside IF_VERBOSE { } blocks to avoid double-checking g_verbose */
+#define LOGINF_RAW(fmt, ...) log_print(LOG_LEVEL_INF, fmt, ##__VA_ARGS__)
+
 #define LOGERR(fmt, ...) log_print(LOG_LEVEL_ERR, fmt, ##__VA_ARGS__)
 #define LOGWAR(fmt, ...) log_print(LOG_LEVEL_WAR, fmt, ##__VA_ARGS__)
 #define LOG_ALWAYS_INF(fmt, ...) log_print(LOG_LEVEL_ALWAYS_INF, fmt, ##__VA_ARGS__)

@@ -157,26 +157,28 @@ static char *build_socks5_udp_header(char *payload_start, const char *fake_domai
     return header_start;
 }
 
-#ifdef ENABLE_SENDTO_LOG
+#ifdef ENABLE_PERPACKET_LOG
 static inline void log_udp_transfer(const char *funcname, const char *action,
                                     const ip_port_t *src, const ip_port_t *dst,
                                     bool is_ipv4, const char *unit, int val) {
-    char src_ipstr[IP6STRLEN];
-    char dst_ipstr[IP6STRLEN];
+    IF_VERBOSE {
+        char src_ipstr[IP6STRLEN];
+        char dst_ipstr[IP6STRLEN];
 
-    if (is_ipv4) {
-        inet_ntop(AF_INET, &src->ip.ip4, src_ipstr, sizeof(src_ipstr));
-        inet_ntop(AF_INET, &dst->ip.ip4, dst_ipstr, sizeof(dst_ipstr));
-    } else {
-        inet_ntop(AF_INET6, &src->ip.ip6, src_ipstr, sizeof(src_ipstr));
-        inet_ntop(AF_INET6, &dst->ip.ip6, dst_ipstr, sizeof(dst_ipstr));
+        if (is_ipv4) {
+            inet_ntop(AF_INET, &src->ip.ip4, src_ipstr, sizeof(src_ipstr));
+            inet_ntop(AF_INET, &dst->ip.ip4, dst_ipstr, sizeof(dst_ipstr));
+        } else {
+            inet_ntop(AF_INET6, &src->ip.ip6, src_ipstr, sizeof(src_ipstr));
+            inet_ntop(AF_INET6, &dst->ip.ip6, dst_ipstr, sizeof(dst_ipstr));
+        }
+
+        LOGINF_RAW("[%s] %s: %s#%hu -> %s#%hu, %s:%d",
+                   funcname, action,
+                   src_ipstr, ntohs(src->port),
+                   dst_ipstr, ntohs(dst->port),
+                   unit, val);
     }
-
-    LOGINF("[%s] %s: %s#%hu -> %s#%hu, %s:%d",
-           funcname, action,
-           src_ipstr, ntohs(src->port),
-           dst_ipstr, ntohs(dst->port),
-           unit, val);
 }
 #endif
 
@@ -219,8 +221,13 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
 
     IF_VERBOSE {
         parse_socket_addr(&skaddr, ipstr, &portno);
-        LOGINF("[handle_udp_socket_msg] recv from %s#%hu, nrecv:%zd", ipstr, portno, nrecv);
     }
+
+#ifdef ENABLE_PERPACKET_LOG
+    IF_VERBOSE {
+        LOGINF_RAW("[handle_udp_socket_msg] recv from %s#%hu, nrecv:%zd", ipstr, portno, nrecv);
+    }
+#endif
 
     ip_port_t key_ipport;
     memset(&key_ipport, 0, sizeof(key_ipport));
@@ -249,12 +256,14 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
                    ((uint8_t *)&target_ip)[2], ((uint8_t *)&target_ip)[3]);
             return;
         }
+#ifdef ENABLE_PERPACKET_LOG
         IF_VERBOSE if (fake_domain) {
-            LOGINF("[handle_udp_socket_msg] fakedns hit: %u.%u.%u.%u -> %s",
-                   ((uint8_t *)&target_ip)[0], ((uint8_t *)&target_ip)[1],
-                   ((uint8_t *)&target_ip)[2], ((uint8_t *)&target_ip)[3],
-                   fake_domain);
+            LOGINF_RAW("[handle_udp_socket_msg] fakedns hit: %u.%u.%u.%u -> %s",
+                       ((uint8_t *)&target_ip)[0], ((uint8_t *)&target_ip)[1],
+                       ((uint8_t *)&target_ip)[2], ((uint8_t *)&target_ip)[3],
+                       fake_domain);
         }
+#endif
     }
 
     /* Build SOCKS5 UDP header backward from payload position (zero-copy optimization) */
@@ -288,10 +297,12 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
             /* Not found, new session needed. Force fork to ensure it goes to Fork Table on creation */
             force_fork = true;
         } else {
+#ifdef ENABLE_PERPACKET_LOG
             IF_VERBOSE {
                 portno_t target_port = isipv4 ? ((skaddr4_t *)&skaddr)->sin_port : skaddr.sin6_port;
-                LOGINF("[handle_udp_socket_msg] reuse fork context (FakeDNS): %s#%hu -> %s#%hu", ipstr, portno, fake_domain, ntohs(target_port));
+                LOGINF_RAW("[handle_udp_socket_msg] reuse fork context (FakeDNS): %s#%hu -> %s#%hu", ipstr, portno, fake_domain, ntohs(target_port));
             }
+#endif
         }
     } else {
         /* Strategy B: Real IP Traffic -> Main Table (Full Cone) -> Fork Table (Fallback) */
@@ -309,12 +320,14 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
             } else {
                 /* Match! Reuse Main Context (Full Cone NAT) */
                 context = main_ctx;
+#ifdef ENABLE_PERPACKET_LOG
                 IF_VERBOSE {
                     char target_ipstr[IP6STRLEN];
                     portno_t target_port;
                     parse_socket_addr(&skaddr, target_ipstr, &target_port);
-                    LOGINF("[handle_udp_socket_msg] reuse main context (RealIP): %s#%hu -> %s#%hu", ipstr, portno, target_ipstr, target_port);
+                    LOGINF_RAW("[handle_udp_socket_msg] reuse main context (RealIP): %s#%hu -> %s#%hu", ipstr, portno, target_ipstr, target_port);
                 }
+#endif
             }
         }
 
@@ -325,12 +338,14 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
             build_fork_key(&fork_key, &key_ipport, &skaddr, isipv4);
             context = udp_socks5ctx_fork_find(&g_udp_fork_table, &fork_key);
             if (context) {
+#ifdef ENABLE_PERPACKET_LOG
                 IF_VERBOSE {
                     char target_ipstr[IP6STRLEN];
                     portno_t target_port;
                     parse_socket_addr(&skaddr, target_ipstr, &target_port);
-                    LOGINF("[handle_udp_socket_msg] reuse fork context (RealIP): %s#%hu -> %s#%hu", ipstr, portno, target_ipstr, target_port);
+                    LOGINF_RAW("[handle_udp_socket_msg] reuse fork context (RealIP): %s#%hu -> %s#%hu", ipstr, portno, target_ipstr, target_port);
                 }
+#endif
             }
             /* If still NULL, creation logic below will use force_fork to decide which table */
         }
@@ -370,8 +385,8 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
         context->is_fakedns = (fake_domain != NULL);
 
         /* orig_dstaddr is consumed in the response path when is_fakedns is set.
-         * When ENABLE_SENDTO_LOG is defined it is also needed for dual-IP logging. */
-#ifndef ENABLE_SENDTO_LOG
+         * When ENABLE_PERPACKET_LOG is defined it is also needed for dual-IP logging. */
+#ifndef ENABLE_PERPACKET_LOG
         if (fake_domain)
 #endif
         {
@@ -415,7 +430,7 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
         context->udp_watcher.data = &context->pending_queue;
 
         context->last_active = ev_now(evloop);
-        context->handshake.step_len = 5; // Expected proxy response header length
+        context->handshake.step_len = SOCKS5_RESP_HEADER_PREFIX_LEN;
 
         udp_socks5ctx_t *del_context = NULL;
 
@@ -428,12 +443,12 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
             IF_VERBOSE {
                 if (fake_domain) {
                     portno_t target_port = isipv4 ? ((skaddr4_t *)&skaddr)->sin_port : skaddr.sin6_port;
-                    LOGINF("[handle_udp_socket_msg] new fork context (FakeDNS): %s#%hu -> %s#%hu", ipstr, portno, fake_domain, ntohs(target_port));
+                    LOGINF_RAW("[handle_udp_socket_msg] new fork context (FakeDNS): %s#%hu -> %s#%hu", ipstr, portno, fake_domain, ntohs(target_port));
                 } else {
                     char target_ipstr[IP6STRLEN];
                     portno_t target_port;
                     parse_socket_addr(&skaddr, target_ipstr, &target_port);
-                    LOGINF("[handle_udp_socket_msg] new fork context (RealIP): %s#%hu -> %s#%hu", ipstr, portno, target_ipstr, target_port);
+                    LOGINF_RAW("[handle_udp_socket_msg] new fork context (RealIP): %s#%hu -> %s#%hu", ipstr, portno, target_ipstr, target_port);
                 }
             }
         } else {
@@ -441,7 +456,7 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
                 char target_ipstr[IP6STRLEN];
                 portno_t target_port;
                 parse_socket_addr(&skaddr, target_ipstr, &target_port);
-                LOGINF("[handle_udp_socket_msg] new main context (RealIP): %s#%hu -> %s#%hu", ipstr, portno, target_ipstr, target_port);
+                LOGINF_RAW("[handle_udp_socket_msg] new main context (RealIP): %s#%hu -> %s#%hu", ipstr, portno, target_ipstr, target_port);
             }
 
             context->is_forked = false;
@@ -504,7 +519,7 @@ static void handle_udp_socket_msg(evloop_t *evloop, evio_t *tprecv_watcher, stru
         }
         return;
     }
-#ifdef ENABLE_SENDTO_LOG
+#ifdef ENABLE_PERPACKET_LOG
     log_udp_transfer("handle_udp_socket_msg", "send",
                      &context->key_ipport, &context->orig_dstaddr,
                      context->dest_is_ipv4, "nsend", (int)nsend);
@@ -677,7 +692,7 @@ static void udp_socks5_recv_proxyresp_cb(evloop_t *evloop, struct ev_watcher *wa
         return;
     }
     /* If we just read the first 5 bytes (Header prefix) */
-    if (context->handshake.step_len == 5) {
+    if (context->handshake.step_len == SOCKS5_RESP_HEADER_PREFIX_LEN) {
         uint8_t atype = ((socks5_resp_header_t *)context->handshake.payload)->addrtype;
         size_t total_len;
 
@@ -699,7 +714,7 @@ static void udp_socks5_recv_proxyresp_cb(evloop_t *evloop, struct ev_watcher *wa
 
         /* Update length targets */
         context->handshake.step_len = (uint16_t)total_len;
-        context->handshake.nbytes = 5; /* We already have 5 bytes */
+        context->handshake.nbytes = SOCKS5_RESP_HEADER_PREFIX_LEN;
 
         /* Attempt to read the rest immediately */
         if (udp_socks5_recv_response("udp_socks5_recv_proxyresp_cb", evloop, tcp_watcher, context->handshake.payload, total_len) != 1) {
@@ -780,7 +795,7 @@ static void udp_socks5_recv_proxyresp_cb(evloop_t *evloop, struct ev_watcher *wa
                 LOGERR("[udp_socks5_recv_proxyresp_cb] sendmmsg drain failed: %s", strerror(errno));
             }
         } else {
-#ifdef ENABLE_SENDTO_LOG
+#ifdef ENABLE_PERPACKET_LOG
             log_udp_transfer("udp_socks5_recv_proxyresp_cb", "sendmmsg",
                              &context->key_ipport, &context->orig_dstaddr,
                              context->dest_is_ipv4, "npackets", sent);
@@ -789,7 +804,7 @@ static void udp_socks5_recv_proxyresp_cb(evloop_t *evloop, struct ev_watcher *wa
                 LOGWAR("[udp_socks5_recv_proxyresp_cb] partial drain %d/%d, using fallback", sent, drain_count);
                 for (int k = sent; k < drain_count; k++) {
                     ssize_t n = send(udp_sockfd, drain_iovs[k].iov_base, drain_iovs[k].iov_len, 0);
-#ifdef ENABLE_SENDTO_LOG
+#ifdef ENABLE_PERPACKET_LOG
                     if (n > 0) {
                         log_udp_transfer("udp_socks5_recv_proxyresp_cb", "send",
                                          &context->key_ipport, &context->orig_dstaddr,
@@ -854,7 +869,7 @@ static inline void sendmmsg_fallback(udp_socks5ctx_t *socks5ctx __attribute__((u
         struct msghdr *hdr = &msgs[k].msg_hdr;
         ssize_t n = sendto(tproxy_ctx->udp_sockfd, hdr->msg_iov[0].iov_base,
                            hdr->msg_iov[0].iov_len, 0, hdr->msg_name, hdr->msg_namelen);
-#ifdef ENABLE_SENDTO_LOG
+#ifdef ENABLE_PERPACKET_LOG
         if (n > 0) {
             log_udp_transfer("udp_socks5_recv_udpmessage_cb", "send",
                              &tproxy_ctx->key_ipport, &socks5ctx->key_ipport,
@@ -1030,8 +1045,8 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, struct ev_watcher *w
                     inet_ntop(AF_INET6, &fromipport.ip.ip6, src_ipstr, sizeof(src_ipstr));
                     inet_ntop(AF_INET6, &socks5ctx->key_ipport.ip.ip6, dst_ipstr, sizeof(dst_ipstr));
                 }
-                LOGINF("[udp_socks5_recv_udpmessage_cb] new tproxy context: %s#%hu -> %s#%hu",
-                       src_ipstr, ntohs(fromipport.port), dst_ipstr, ntohs(socks5ctx->key_ipport.port));
+                LOGINF_RAW("[udp_socks5_recv_udpmessage_cb] new tproxy context: %s#%hu -> %s#%hu",
+                           src_ipstr, ntohs(fromipport.port), dst_ipstr, ntohs(socks5ctx->key_ipport.port));
             }
         } else {
             tproxyctx->last_active = ev_now(evloop);
@@ -1092,7 +1107,7 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, struct ev_watcher *w
                     LOGERR("[udp_socks5_recv_udpmessage_cb] sendmmsg failed: %s", strerror(errno));
                 }
             } else {
-#ifdef ENABLE_SENDTO_LOG
+#ifdef ENABLE_PERPACKET_LOG
                 log_udp_transfer("udp_socks5_recv_udpmessage_cb", "sendmmsg",
                                  &first_ctx->key_ipport, &socks5ctx->key_ipport,
                                  socks5ctx->dest_is_ipv4, "npackets", sent);
@@ -1138,7 +1153,7 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, struct ev_watcher *w
                         LOGERR("[udp_socks5_recv_udpmessage_cb] sendmmsg failed: %s", strerror(errno));
                     }
                 } else {
-#ifdef ENABLE_SENDTO_LOG
+#ifdef ENABLE_PERPACKET_LOG
                     log_udp_transfer("udp_socks5_recv_udpmessage_cb", "sendmmsg",
                                      &ctx->key_ipport, &socks5ctx->key_ipport,
                                      socks5ctx->dest_is_ipv4, "npackets", sent);
