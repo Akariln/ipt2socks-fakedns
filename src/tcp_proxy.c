@@ -1,7 +1,6 @@
 #include "tcp_proxy.h"
 
 #include <errno.h>
-#include <fcntl.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -49,6 +48,21 @@ static void tcp_stream_payload_forward_cb(evloop_t *evloop, struct ev_watcher *w
 
 static inline tcp_context_t* get_tcpctx_by_watcher(evio_t *watcher) {
     return (tcp_context_t *)watcher->data;
+}
+
+static inline void ev_io_remove_event(evloop_t *evloop, evio_t *w, int event) {
+    int new_events = w->events & ~event;
+    ev_io_stop(evloop, w);
+    if (new_events) {
+        ev_io_set(w, w->fd, new_events);
+        ev_io_start(evloop, w);
+    }
+}
+
+static inline void ev_io_add_event(evloop_t *evloop, evio_t *w, int event) {
+    ev_io_stop(evloop, w);
+    ev_io_set(w, w->fd, w->events | event);
+    ev_io_start(evloop, w);
 }
 
 static inline void tcp_context_release(evloop_t *evloop, tcp_context_t *context, bool is_tcp_reset) {
@@ -463,12 +477,7 @@ static void tcp_stream_payload_forward_cb(evloop_t *evloop, struct ev_watcher *w
         if (nrecv == 0) {
             LOGINF("[tcp_stream_payload_forward_cb] recv FIN from %s stream", self_is_client ? "client" : "socks5");
             *self_eof = true;
-            int new_events = self_watcher->events & ~EV_READ;
-            ev_io_stop(evloop, self_watcher);
-            if (new_events) {
-                ev_io_set(self_watcher, self_watcher->fd, new_events);
-                ev_io_start(evloop, self_watcher);
-            }
+            ev_io_remove_event(evloop, self_watcher, EV_READ);
 
             if (*self_pending == 0) {
                 shutdown(peer_watcher->fd, SHUT_WR);
@@ -492,17 +501,8 @@ static void tcp_stream_payload_forward_cb(evloop_t *evloop, struct ev_watcher *w
             if (nsend < nrecv) {
                 *self_pending = (uint32_t)(nrecv - nsend); // remain_length
 
-                int new_self_events = self_watcher->events & ~EV_READ;
-                ev_io_stop(evloop, self_watcher);
-                if (new_self_events) {
-                    ev_io_set(self_watcher, self_watcher->fd, new_self_events);
-                    ev_io_start(evloop, self_watcher);
-                }
-
-                int new_peer_events = peer_watcher->events | EV_WRITE;
-                ev_io_stop(evloop, peer_watcher);
-                ev_io_set(peer_watcher, peer_watcher->fd, new_peer_events);
-                ev_io_start(evloop, peer_watcher);
+                ev_io_remove_event(evloop, self_watcher, EV_READ);
+                ev_io_add_event(evloop, peer_watcher, EV_WRITE);
             }
         }
     }
@@ -529,18 +529,10 @@ DO_WRITE:
             *peer_pending -= (uint32_t)nsend;
 
             if (*peer_pending == 0) {
-                int new_events = self_watcher->events & ~EV_WRITE;
-                ev_io_stop(evloop, self_watcher);
-                if (new_events) {
-                    ev_io_set(self_watcher, self_watcher->fd, new_events);
-                    ev_io_start(evloop, self_watcher);
-                }
+                ev_io_remove_event(evloop, self_watcher, EV_WRITE);
 
                 if (!*peer_eof) {
-                    int peer_new_events = peer_watcher->events | EV_READ;
-                    ev_io_stop(evloop, peer_watcher);
-                    ev_io_set(peer_watcher, peer_watcher->fd, peer_new_events);
-                    ev_io_start(evloop, peer_watcher);
+                    ev_io_add_event(evloop, peer_watcher, EV_READ);
                 } else {
                     shutdown(self_watcher->fd, SHUT_WR);
                 }

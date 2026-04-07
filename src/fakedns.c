@@ -129,6 +129,12 @@ void fakedns_init(const char *cidr_str) {
     LOG_ALWAYS_INF("[fakedns_init] Max probe steps: %u", g_max_probes);
 }
 
+static inline void entry_set_domain(fakedns_entry_t *entry, const char *domain, size_t len) {
+    size_t copy_len = len >= sizeof(entry->domain) ? sizeof(entry->domain) - 1 : len;
+    memcpy(entry->domain, domain, copy_len);
+    entry->domain[copy_len] = '\0';
+}
+
 static uint32_t fakedns_lookup_domain(const char *domain, size_t len) {
     if (!domain || !g_pool_size) {
         return 0;
@@ -156,10 +162,9 @@ static uint32_t fakedns_lookup_domain(const char *domain, size_t len) {
      * Therefore the rdlock is a no-op and is commented out for performance.
      *
      * [MULTI-WRITER EXTENSION] If fakedns_lookup_domain is ever called from
-     * multiple threads, uncomment the rdlock/unlock pairs below to restore
-     * Phase 1 read-lock protection against concurrent Phase 2 writes.
+     * multiple threads, wrap the Phase 1 loop with rdlock/unlock to restore
+     * read-lock protection against concurrent Phase 2 writes.
      */
-    // pthread_rwlock_rdlock(&g_fakedns_rwlock);
 
     for (uint32_t i = 0; i < g_max_probes; ++i) {
         uint32_t ip_host = g_fakeip_net_host + offset;
@@ -178,21 +183,17 @@ static uint32_t fakedns_lookup_domain(const char *domain, size_t len) {
 
             // Lazy update: only update if TTL remaining < 30%
             if (remaining > FAKEDNS_TTL_REFRESH_THRESHOLD) {
-                // pthread_rwlock_unlock(&g_fakedns_rwlock);
                 return ip_net;
             }
 
             __atomic_store_n(&entry->expire, now + FAKEDNS_TTL, __ATOMIC_RELAXED);
 
-            // pthread_rwlock_unlock(&g_fakedns_rwlock);
             return ip_net;
         }
         // Collision, continue probing (Double Hashing)
         offset = (offset + step) & pool_mask;
 
     }
-
-    // pthread_rwlock_unlock(&g_fakedns_rwlock);
 
     // Phase 2: Acquire write lock for insert/update
     pthread_rwlock_wrlock(&g_fakedns_rwlock);
@@ -224,9 +225,7 @@ static uint32_t fakedns_lookup_domain(const char *domain, size_t len) {
                 return 0;
             }
             entry->ip = ip_net;
-            size_t copy_len = len >= sizeof(entry->domain) ? sizeof(entry->domain) - 1 : len;
-            memcpy(entry->domain, domain, copy_len);
-            entry->domain[copy_len] = '\0';
+            entry_set_domain(entry, domain, len);
             entry->expire = now + FAKEDNS_TTL;
             entry->version = 1;
             __atomic_store_n(&g_fakedns_pool[offset], entry, __ATOMIC_RELEASE);
@@ -273,9 +272,7 @@ static uint32_t fakedns_lookup_domain(const char *domain, size_t len) {
             }
 
             // Reset entry for new domain
-            size_t copy_len = len >= sizeof(entry->domain) ? sizeof(entry->domain) - 1 : len;
-            memcpy(entry->domain, domain, copy_len);
-            entry->domain[copy_len] = '\0';
+            entry_set_domain(entry, domain, len);
             __atomic_store_n(&entry->expire, now + FAKEDNS_TTL, __ATOMIC_RELAXED);
             // Atomically increment version so all threaded MRU caches instantly know it's dirty
             __atomic_add_fetch(&entry->version, 1, __ATOMIC_RELEASE);

@@ -983,13 +983,11 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, struct ev_watcher *w
                 fromipport.ip.ip4 = udp4msg->ipaddr4;
                 fromipport.port = udp4msg->portnum;
                 dest_isipv4 = true;
-            } else if (isipv6) {
+            } else {
                 socks5_udp6msg_t *udp6msg = (void *)buffer;
                 memcpy(&fromipport.ip.ip6, &udp6msg->ipaddr6, IP6BINLEN);
                 fromipport.port = udp6msg->portnum;
                 dest_isipv4 = false;
-            } else {
-                continue;  /* Unsupported type */
             }
         }
 

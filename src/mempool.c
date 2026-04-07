@@ -54,6 +54,7 @@ struct memory_pool {
 
     size_t pool_allocs;
     size_t pool_frees;
+    size_t warn_counter;
 };
 
 static inline void* block_to_data(void *header) {
@@ -181,8 +182,7 @@ void* mempool_alloc_sized(memory_pool_t *pool, size_t size) {
         return block_to_data(header);
     }
 
-    static __thread int warn_counter = 0;
-    if (warn_counter++ % 1000 == 0) {
+    if (pool->warn_counter++ % 1000 == 0) {
         LOGWAR("[mempool] pool exhausted (%zu/%zu)", pool->pool_blocks, pool->max_blocks);
     }
     return NULL;
