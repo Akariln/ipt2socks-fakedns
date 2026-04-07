@@ -910,7 +910,7 @@ static void udp_socks5_recv_udpmessage_cb(evloop_t *evloop, struct ev_watcher *w
         udpmsg_initialized = true;
     }
 
-    int retval = recvmmsg(udp_watcher->fd, msgs, UDP_BATCH_SIZE, MSG_DONTWAIT, NULL);
+    int retval = recvmmsg(udp_watcher->fd, msgs, UDP_BATCH_SIZE, 0, NULL);
 
     if (retval < 0) {
         if (errno != EAGAIN && errno != EWOULDBLOCK) {

@@ -47,7 +47,7 @@ void fakedns_server_recv_cb(evloop_t *evloop, struct ev_watcher *watcher, int re
         s_iovecs[i].iov_len = FAKEDNS_MAX_UDP_SIZE; /* send path sets this to nresp */
     }
 
-    int nrecv = recvmmsg(io_watcher->fd, s_msgs, FAKEDNS_BATCH_SIZE, MSG_DONTWAIT, NULL);
+    int nrecv = recvmmsg(io_watcher->fd, s_msgs, FAKEDNS_BATCH_SIZE, 0, NULL);
     if (nrecv < 0) {
         if (errno != EAGAIN && errno != EWOULDBLOCK) {
             LOGERR("[fakedns_server_recv_cb] recvmmsg: %s", strerror(errno));
