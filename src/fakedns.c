@@ -740,8 +740,10 @@ void fakedns_save(const char *path) {
 
     pthread_rwlock_rdlock(&g_fakedns_rwlock);  // Use read lock for saving
 
-    // Count valid entries
-    uint32_t count = g_pool_used;
+    uint32_t now = (uint32_t)time(NULL);
+
+    // Write Header (count=0 as placeholder, patched after writing entries)
+    uint32_t count = 0;
 
     // Write Header
     if (fwrite(&FAKEDNS_MAGIC, 4, 1, fp) != 1 ||
@@ -765,11 +767,14 @@ void fakedns_save(const char *path) {
         return;
     }
 
-    // Write Entries
+    // Write Entries (skip expired)
     bool success = true;
+    uint32_t actual_count = 0;
     for (uint32_t i = 0; i < g_pool_size; ++i) {
         fakedns_entry_t *entry = g_fakedns_pool[i];
         if (entry) {
+            uint32_t exp = __atomic_load_n(&entry->expire, __ATOMIC_RELAXED);
+            if (exp <= now) continue;  // skip expired entries
             uint16_t dlen = (uint16_t)strlen(entry->domain);
             if (fwrite(&entry->ip, 4, 1, fp) != 1 ||
                     fwrite(&dlen, 2, 1, fp) != 1 ||
@@ -778,7 +783,19 @@ void fakedns_save(const char *path) {
                 success = false;
                 break;
             }
+            actual_count++;
         }
+    }
+
+    // Patch the entry count in header (offset 8 = magic[4] + version[4])
+    if (success && fseek(fp, 8, SEEK_SET) == 0) {
+        if (fwrite(&actual_count, 4, 1, fp) != 1) {
+            LOGERR("[fakedns_save] failed to patch count in %s", tmp_path);
+            success = false;
+        }
+    } else if (success) {
+        LOGERR("[fakedns_save] failed to seek for count patch in %s", tmp_path);
+        success = false;
     }
 
     pthread_rwlock_unlock(&g_fakedns_rwlock);
@@ -796,7 +813,7 @@ void fakedns_save(const char *path) {
             LOGERR("[fakedns_save] failed to rename %s to %s: %s", tmp_path, path, strerror(errno));
             unlink(tmp_path);
         } else {
-            LOG_ALWAYS_INF("[fakedns_save] saved %u entries to %s", count, path);
+            LOG_ALWAYS_INF("[fakedns_save] saved %u entries to %s", actual_count, path);
         }
     } else {
         unlink(tmp_path);
