@@ -327,7 +327,9 @@ static inline int new_nonblock_sockfd(int family, int sktype) {
 
 int new_tcp_listen_sockfd(int family, bool is_tproxy, bool is_reuse_port, bool is_tfo_accept) {
     int sockfd = new_nonblock_sockfd(family, SOCK_STREAM);
-    if (sockfd < 0) return sockfd;
+    if (sockfd < 0) {
+        return sockfd;
+    }
     if (is_tproxy) {
         set_ip_transparent(family, sockfd);
     }
@@ -342,7 +344,9 @@ int new_tcp_listen_sockfd(int family, bool is_tproxy, bool is_reuse_port, bool i
 
 int new_tcp_connect_sockfd(int family, uint8_t tcp_syncnt) {
     int sockfd = new_nonblock_sockfd(family, SOCK_STREAM);
-    if (sockfd < 0) return sockfd;
+    if (sockfd < 0) {
+        return sockfd;
+    }
     set_tcp_nodelay(sockfd);
     set_tcp_quickack(sockfd);
     set_tcp_keepalive(sockfd);
@@ -354,7 +358,9 @@ int new_tcp_connect_sockfd(int family, uint8_t tcp_syncnt) {
 
 int new_udp_tprecv_sockfd(int family, bool is_reuse_port) {
     int sockfd = new_nonblock_sockfd(family, SOCK_DGRAM);
-    if (sockfd < 0) return sockfd;
+    if (sockfd < 0) {
+        return sockfd;
+    }
     set_ip_transparent(family, sockfd);
     set_recv_origdstaddr(family, sockfd);
     if (is_reuse_port) {
@@ -365,7 +371,9 @@ int new_udp_tprecv_sockfd(int family, bool is_reuse_port) {
 
 int new_udp_tpsend_sockfd(int family) {
     int sockfd = new_nonblock_sockfd(family, SOCK_DGRAM);
-    if (sockfd < 0) return sockfd;
+    if (sockfd < 0) {
+        return sockfd;
+    }
     set_ip_transparent(family, sockfd);
     return sockfd;
 }
