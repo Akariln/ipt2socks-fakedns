@@ -142,29 +142,35 @@ static uint32_t fakedns_lookup_domain(const char *domain, size_t len) {
 
     uint32_t pool_mask = g_pool_size - 1;
     uint64_t hash = XXH3_64bits(domain, len);
-    uint32_t offset_start = (uint32_t)(hash & pool_mask);
+    uint32_t offset = (uint32_t)(hash & pool_mask);
     /* Double Hashing: Use upper 32 bits as step size. Must be odd (coprime to power-of-2 size). */
     uint32_t step = (uint32_t)(hash >> 32) | 1;
-
-    uint32_t offset = offset_start;
     uint32_t now = (uint32_t)time(NULL);
 
     /*
-     * Phase 1: Lock-free fast path (cache hit with valid TTL)
+     * Single-writer design: this function is the sole writer, called
+     * exclusively from the DNS event loop thread. No rdlock is needed
+     * in Phase 1 because the only wrlock holder is Phase 2, which runs
+     * on this same thread (sequential, never concurrent).
      *
-     * In the current single-writer architecture, fakedns_lookup_domain is
-     * the sole writer and is called exclusively from the DNS server event
-     * loop thread. The rdlock here would only conflict with wrlock, but:
-     *   - Phase 2 wrlock is on the same thread (sequential, never concurrent)
-     *   - fakedns_load wrlock runs only at init (before any concurrent access)
-     *   - fakedns_reverse_lookup / fakedns_save hold rdlocks (no conflict)
+     * Phase 1 — Lock-free probe chain scan:
+     *   - Match with valid TTL  → return immediately (fast path)
+     *   - Match with stale TTL  → refresh TTL, return
+     *   - Empty slot            → record position, fall through to Phase 2
+     *   - Collision (expired)   → record first such offset for Phase 2
+     *   - Collision (valid)     → continue probing
      *
-     * Therefore the rdlock is a no-op and is commented out for performance.
+     * Phase 2 — Direct dispatch under wrlock (no re-scan):
+     *   - Empty slot recorded   → insert new entry
+     *   - Expired slot recorded → overwrite with new domain
+     *   - Neither               → probes exhausted, reject
      *
-     * [MULTI-WRITER EXTENSION] If fakedns_lookup_domain is ever called from
-     * multiple threads, wrap the Phase 1 loop with rdlock/unlock to restore
-     * read-lock protection against concurrent Phase 2 writes.
+     * [MULTI-WRITER] If this function is ever called from multiple
+     * threads, Phase 2 must re-scan the full probe chain under wrlock.
      */
+
+    bool need_insert = false;
+    uint32_t first_expired_offset = UINT32_MAX;
 
     for (uint32_t i = 0; i < g_max_probes; ++i) {
         uint32_t ip_host = g_fakeip_net_host + offset;
@@ -174,6 +180,7 @@ static uint32_t fakedns_lookup_domain(const char *domain, size_t len) {
 
         if (!entry) {
             // Empty slot found, need write lock to insert
+            need_insert = true;
             break;
         }
         if (strcmp(entry->domain, domain) == 0) {
@@ -190,103 +197,95 @@ static uint32_t fakedns_lookup_domain(const char *domain, size_t len) {
 
             return ip_net;
         }
-        // Collision, continue probing (Double Hashing)
+        // Collision: track first expired entry for potential overwrite
+        if (first_expired_offset == UINT32_MAX) {
+            uint32_t exp = __atomic_load_n(&entry->expire, __ATOMIC_RELAXED);
+            if ((int32_t)(exp - now) < 0) {
+                first_expired_offset = offset;
+            }
+        }
+        // Continue probing (Double Hashing)
         offset = (offset + step) & pool_mask;
-
     }
 
-    // Phase 2: Acquire write lock for insert/update
+    /*
+     * Phase 2: Direct dispatch based on Phase 1 results (no re-scan).
+     *
+     * In the single-writer architecture, the probe chain cannot change
+     * between Phase 1 and Phase 2 (same thread, sequential execution),
+     * so Phase 1's findings are authoritative.
+     */
     pthread_rwlock_wrlock(&g_fakedns_rwlock);
 
-    // Reset offset for write path
-    offset = offset_start;
-
-    for (uint32_t i = 0; i < g_max_probes; ++i) {
+    if (need_insert) {
+        // Insert at `offset` (the empty slot found by Phase 1)
         uint32_t ip_host = g_fakeip_net_host + offset;
         uint32_t ip_net = htonl(ip_host);
 
-        fakedns_entry_t *entry = g_fakedns_pool[offset];
+        if (g_pool_used >= g_pool_size) {
+            pthread_rwlock_unlock(&g_fakedns_rwlock);
+            LOGERR("[fakedns_lookup_domain] pool is full (%u/%u), rejected: %s", g_pool_used, g_pool_size, domain);
+            return 0;
+        }
 
+        fakedns_entry_t *entry;
+        if (posix_memalign((void **)&entry, 64, sizeof(fakedns_entry_t)) != 0) {
+            entry = NULL;
+        }
         if (!entry) {
-            // Check if pool is full before adding new entry
-            if (g_pool_used >= g_pool_size) {
-                pthread_rwlock_unlock(&g_fakedns_rwlock);
-                LOGERR("[fakedns_lookup_domain] pool is full (%u/%u), rejected: %s", g_pool_used, g_pool_size, domain);
-                return 0;
-            }
-
-            // Found empty slot, insert new entry
-            if (posix_memalign((void **)&entry, 64, sizeof(fakedns_entry_t)) != 0) {
-                entry = NULL;
-            }
-            if (!entry) {
-                pthread_rwlock_unlock(&g_fakedns_rwlock);
-                LOGERR("[fakedns_lookup_domain] posix_memalign failed for domain: %s", domain);
-                return 0;
-            }
-            entry->ip = ip_net;
-            entry_set_domain(entry, domain, len);
-            entry->expire = now + FAKEDNS_TTL;
-            entry->version = 1;
-            __atomic_store_n(&g_fakedns_pool[offset], entry, __ATOMIC_RELEASE);
-            g_pool_used++;
-
-            float usage = (float)g_pool_used / (float)g_pool_size;
-            if (usage >= FAKEDNS_POOL_CRITICAL_THRESHOLD) {
-                // Throttle critical warnings
-                uint32_t warn_step = g_pool_size / 50;
-
-                if (g_pool_used - g_last_warn_used >= warn_step) {
-                    LOGERR("[fakedns] CRITICAL: pool usage is critically high: %.1f%% (%u/%u)", usage * 100.0f, g_pool_used, g_pool_size);
-                    g_last_warn_used = g_pool_used;
-                }
-            } else if (usage >= FAKEDNS_POOL_WARN_THRESHOLD) {
-                // Only warn every 5% increase to avoid spam
-                uint32_t warn_step = g_pool_size / 20;
-
-                if (g_pool_used - g_last_warn_used >= warn_step) {
-                    LOGWAR("[fakedns] WARNING: pool usage is high: %.1f%% (%u/%u)", usage * 100.0f, g_pool_used, g_pool_size);
-                    g_last_warn_used = g_pool_used;
-                }
-            }
-
             pthread_rwlock_unlock(&g_fakedns_rwlock);
-            return ip_net;
+            LOGERR("[fakedns_lookup_domain] posix_memalign failed for domain: %s", domain);
+            return 0;
         }
-        // Slot occupied
-        if (strcmp(entry->domain, domain) == 0) {
-            // Match confirmed, update TTL
-            __atomic_store_n(&entry->expire, now + FAKEDNS_TTL, __ATOMIC_RELAXED);
-            pthread_rwlock_unlock(&g_fakedns_rwlock);
+        entry->ip = ip_net;
+        entry_set_domain(entry, domain, len);
+        entry->expire = now + FAKEDNS_TTL;
+        entry->version = 1;
+        __atomic_store_n(&g_fakedns_pool[offset], entry, __ATOMIC_RELEASE);
+        g_pool_used++;
 
-            return ip_net;
-        }
-        // Collision
-        // Strategy A: Overwrite if expired
-        int32_t remaining = (int32_t)(entry->expire - now);
-        if (remaining < 0) {
-            IF_VERBOSE {
-                LOGINF_RAW("[fakedns] overwrite expired entry: %s -> %s (IP: %u.%u.%u.%u)",
-                           entry->domain, domain,
-                           ((uint8_t*)&ip_net)[0], ((uint8_t*)&ip_net)[1], ((uint8_t*)&ip_net)[2], ((uint8_t*)&ip_net)[3]);
+        float usage = (float)g_pool_used / (float)g_pool_size;
+        if (usage >= FAKEDNS_POOL_CRITICAL_THRESHOLD) {
+            uint32_t warn_step = g_pool_size / 50;
+
+            if (g_pool_used - g_last_warn_used >= warn_step) {
+                LOGERR("[fakedns] CRITICAL: pool usage is critically high: %.1f%% (%u/%u)", usage * 100.0f, g_pool_used, g_pool_size);
+                g_last_warn_used = g_pool_used;
             }
+        } else if (usage >= FAKEDNS_POOL_WARN_THRESHOLD) {
+            uint32_t warn_step = g_pool_size / 20;
 
-            // Reset entry for new domain
-            entry_set_domain(entry, domain, len);
-            __atomic_store_n(&entry->expire, now + FAKEDNS_TTL, __ATOMIC_RELAXED);
-            // Atomically increment version so all threaded MRU caches instantly know it's dirty
-            __atomic_add_fetch(&entry->version, 1, __ATOMIC_RELEASE);
-
-            pthread_rwlock_unlock(&g_fakedns_rwlock);
-            return ip_net;
+            if (g_pool_used - g_last_warn_used >= warn_step) {
+                LOGWAR("[fakedns] WARNING: pool usage is high: %.1f%% (%u/%u)", usage * 100.0f, g_pool_used, g_pool_size);
+                g_last_warn_used = g_pool_used;
+            }
         }
 
-        // Still valid, linear probe (Double Hashing)
-        offset = (offset + step) & pool_mask;
-
-
+        pthread_rwlock_unlock(&g_fakedns_rwlock);
+        return ip_net;
     }
 
+    if (first_expired_offset != UINT32_MAX) {
+        // Overwrite expired entry found during Phase 1 probing
+        uint32_t ip_host = g_fakeip_net_host + first_expired_offset;
+        uint32_t ip_net = htonl(ip_host);
+        fakedns_entry_t *entry = g_fakedns_pool[first_expired_offset];
+
+        IF_VERBOSE {
+            LOGINF_RAW("[fakedns] overwrite expired entry: %s -> %s (IP: %u.%u.%u.%u)",
+                       entry->domain, domain,
+                       ((uint8_t*)&ip_net)[0], ((uint8_t*)&ip_net)[1], ((uint8_t*)&ip_net)[2], ((uint8_t*)&ip_net)[3]);
+        }
+
+        entry_set_domain(entry, domain, len);
+        __atomic_store_n(&entry->expire, now + FAKEDNS_TTL, __ATOMIC_RELAXED);
+        __atomic_add_fetch(&entry->version, 1, __ATOMIC_RELEASE);
+
+        pthread_rwlock_unlock(&g_fakedns_rwlock);
+        return ip_net;
+    }
+
+    // All probes exhausted, no empty slot or expired entry available
     pthread_rwlock_unlock(&g_fakedns_rwlock);
     LOGERR("[fakedns_lookup_domain] max probes (%u) exhausted for domain: %s", g_max_probes, domain);
     return 0;
@@ -302,7 +301,9 @@ bool fakedns_is_fakeip(uint32_t ip_net) {
 
 const char *fakedns_try_resolve(uint32_t ip_net, bool *is_miss) {
     *is_miss = false;
-    if (!fakedns_is_fakeip(ip_net)) return NULL;
+    if (!fakedns_is_fakeip(ip_net)) {
+        return NULL;
+    }
     static __thread char resolve_buf[FAKEDNS_MAX_DOMAIN_LEN];
     if (fakedns_reverse_lookup(ip_net, resolve_buf, sizeof(resolve_buf))) {
         return resolve_buf;
@@ -397,7 +398,7 @@ bool fakedns_reverse_lookup(uint32_t ip, char *buffer, size_t buf_len) {
         dlen = strnlen(entry->domain, sizeof(tmp_domain) - 1);
         memcpy(tmp_domain, entry->domain, dlen);
         tmp_domain[dlen] = '\0';
-        tmp_version = entry->version;
+        tmp_version = __atomic_load_n(&entry->version, __ATOMIC_ACQUIRE);
         found = true;
     }
     pthread_rwlock_unlock(&g_fakedns_rwlock);
@@ -738,19 +739,14 @@ void fakedns_save(const char *path) {
         return;
     }
 
-    pthread_rwlock_rdlock(&g_fakedns_rwlock);  // Use read lock for saving
-
     uint32_t now = (uint32_t)time(NULL);
 
     // Write Header (count=0 as placeholder, patched after writing entries)
     uint32_t count = 0;
-
-    // Write Header
     if (fwrite(&FAKEDNS_MAGIC, 4, 1, fp) != 1 ||
             fwrite(&FAKEDNS_VERSION, 4, 1, fp) != 1 ||
             fwrite(&count, 4, 1, fp) != 1) {
         LOGERR("[fakedns_save] failed to write header to %s", tmp_path);
-        pthread_rwlock_unlock(&g_fakedns_rwlock);
         fclose(fp);
         unlink(tmp_path);
         return;
@@ -761,7 +757,6 @@ void fakedns_save(const char *path) {
     if (fwrite(&cidr_len, 2, 1, fp) != 1 ||
             fwrite(g_cidr_str, 1, cidr_len, fp) != cidr_len) {
         LOGERR("[fakedns_save] failed to write CIDR to %s", tmp_path);
-        pthread_rwlock_unlock(&g_fakedns_rwlock);
         fclose(fp);
         unlink(tmp_path);
         return;
@@ -772,19 +767,21 @@ void fakedns_save(const char *path) {
     uint32_t actual_count = 0;
     for (uint32_t i = 0; i < g_pool_size; ++i) {
         fakedns_entry_t *entry = g_fakedns_pool[i];
-        if (entry) {
-            uint32_t exp = __atomic_load_n(&entry->expire, __ATOMIC_RELAXED);
-            if (exp <= now) continue;  // skip expired entries
-            uint16_t dlen = (uint16_t)strlen(entry->domain);
-            if (fwrite(&entry->ip, 4, 1, fp) != 1 ||
-                    fwrite(&dlen, 2, 1, fp) != 1 ||
-                    fwrite(entry->domain, 1, dlen, fp) != dlen) {
-                LOGERR("[fakedns_save] failed to write entry to %s", tmp_path);
-                success = false;
-                break;
-            }
-            actual_count++;
+        if (!entry) {
+            continue;
         }
+        if (entry->expire <= now) {
+            continue;  // skip expired entries
+        }
+        uint16_t dlen = (uint16_t)strlen(entry->domain);
+        if (fwrite(&entry->ip, 4, 1, fp) != 1 ||
+                fwrite(&dlen, 2, 1, fp) != 1 ||
+                fwrite(entry->domain, 1, dlen, fp) != dlen) {
+            LOGERR("[fakedns_save] failed to write entry to %s", tmp_path);
+            success = false;
+            break;
+        }
+        actual_count++;
     }
 
     // Patch the entry count in header (offset 8 = magic[4] + version[4])
@@ -797,8 +794,6 @@ void fakedns_save(const char *path) {
         LOGERR("[fakedns_save] failed to seek for count patch in %s", tmp_path);
         success = false;
     }
-
-    pthread_rwlock_unlock(&g_fakedns_rwlock);
 
     // Ensure data is flushed to disk
     if (fflush(fp) != 0 || fsync(fileno(fp)) != 0) {
@@ -884,8 +879,6 @@ void fakedns_load(const char *path) {
         return;
     }
 
-    pthread_rwlock_wrlock(&g_fakedns_rwlock);  // Use write lock for loading
-
     uint32_t now = (uint32_t)time(NULL);
     uint32_t loaded = 0;
     for (uint32_t i = 0; i < count; i++) {
@@ -948,12 +941,13 @@ void fakedns_load(const char *path) {
             g_pool_used++;
             loaded++;
         } else {
+            // Overwrite domain from persisted data; version not incremented
+            // because load runs at init before any MRU caches exist.
             memcpy(entry->domain, domain, dlen + 1);
             entry->expire = expire;
         }
     }
 
-    pthread_rwlock_unlock(&g_fakedns_rwlock);
     fclose(fp);
     LOG_ALWAYS_INF("[fakedns_load] loaded %u/%u entries from %s", loaded, count, path);
 }
