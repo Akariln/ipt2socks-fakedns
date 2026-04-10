@@ -569,7 +569,10 @@ size_t fakedns_process_query(const uint8_t *query, size_t qlen, uint8_t *buffer,
         if (dom_len > 0) {
             domain[dom_len++] = '.';
         }
-        memcpy(domain + dom_len, query + offset + 1, len);
+        for (size_t j = 0; j < len; ++j) {
+            uint8_t c = query[offset + 1 + j];
+            domain[dom_len + j] = (char)((c >= 'A' && c <= 'Z') ? (c | 0x20) : c);
+        }
         dom_len += len;
 
         offset += 1 + len;
@@ -667,6 +670,10 @@ size_t fakedns_process_query(const uint8_t *query, size_t qlen, uint8_t *buffer,
                 LOGINF_RAW("[fakedns] query: A %s -> %u.%u.%u.%u", domain,
                            ((uint8_t*)&fakeip)[0], ((uint8_t*)&fakeip)[1], ((uint8_t*)&fakeip)[2], ((uint8_t*)&fakeip)[3]);
             }
+        } else {
+            resp_flags |= 0x0002; // RCODE = SERVFAIL
+            buffer[2] = (uint8_t)((resp_flags >> 8) & 0xFF);
+            buffer[3] = (uint8_t)(resp_flags & 0xFF);
         }
     } else if (qtype == 28) { /* AAAA Record */
         // Return NOERROR with 0 Answers (Handling dual-stack fallback)
