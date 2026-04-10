@@ -161,8 +161,8 @@ static uint32_t fakedns_lookup_domain(const char *domain, size_t len) {
      *   - Collision (valid)     → continue probing
      *
      * Phase 2 — Direct dispatch under wrlock (no re-scan):
+     *   - Expired slot recorded → overwrite with new domain (preferred: reuses memory, shorter probe chain)
      *   - Empty slot recorded   → insert new entry
-     *   - Expired slot recorded → overwrite with new domain
      *   - Neither               → probes exhausted, reject
      *
      * [MULTI-WRITER] If this function is ever called from multiple
@@ -217,6 +217,26 @@ static uint32_t fakedns_lookup_domain(const char *domain, size_t len) {
      */
     pthread_rwlock_wrlock(&g_fakedns_rwlock);
 
+    if (first_expired_offset != UINT32_MAX) {
+        // Overwrite expired entry found during Phase 1 probing
+        uint32_t ip_host = g_fakeip_net_host + first_expired_offset;
+        uint32_t ip_net = htonl(ip_host);
+        fakedns_entry_t *entry = g_fakedns_pool[first_expired_offset];
+
+        IF_VERBOSE {
+            LOGINF_RAW("[fakedns] overwrite expired entry: %s -> %s (IP: %u.%u.%u.%u)",
+                       entry->domain, domain,
+                       ((uint8_t*)&ip_net)[0], ((uint8_t*)&ip_net)[1], ((uint8_t*)&ip_net)[2], ((uint8_t*)&ip_net)[3]);
+        }
+
+        entry_set_domain(entry, domain, len);
+        __atomic_store_n(&entry->expire, now + FAKEDNS_TTL, __ATOMIC_RELAXED);
+        __atomic_add_fetch(&entry->version, 1, __ATOMIC_RELEASE);
+
+        pthread_rwlock_unlock(&g_fakedns_rwlock);
+        return ip_net;
+    }
+
     if (need_insert) {
         // Insert at `offset` (the empty slot found by Phase 1)
         uint32_t ip_host = g_fakeip_net_host + offset;
@@ -260,26 +280,6 @@ static uint32_t fakedns_lookup_domain(const char *domain, size_t len) {
                 g_last_warn_used = g_pool_used;
             }
         }
-
-        pthread_rwlock_unlock(&g_fakedns_rwlock);
-        return ip_net;
-    }
-
-    if (first_expired_offset != UINT32_MAX) {
-        // Overwrite expired entry found during Phase 1 probing
-        uint32_t ip_host = g_fakeip_net_host + first_expired_offset;
-        uint32_t ip_net = htonl(ip_host);
-        fakedns_entry_t *entry = g_fakedns_pool[first_expired_offset];
-
-        IF_VERBOSE {
-            LOGINF_RAW("[fakedns] overwrite expired entry: %s -> %s (IP: %u.%u.%u.%u)",
-                       entry->domain, domain,
-                       ((uint8_t*)&ip_net)[0], ((uint8_t*)&ip_net)[1], ((uint8_t*)&ip_net)[2], ((uint8_t*)&ip_net)[3]);
-        }
-
-        entry_set_domain(entry, domain, len);
-        __atomic_store_n(&entry->expire, now + FAKEDNS_TTL, __ATOMIC_RELAXED);
-        __atomic_add_fetch(&entry->version, 1, __ATOMIC_RELEASE);
 
         pthread_rwlock_unlock(&g_fakedns_rwlock);
         return ip_net;
