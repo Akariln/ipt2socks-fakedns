@@ -16,7 +16,7 @@
 #include "logutils.h"
 
 typedef struct {
-    uint32_t ip; /* Network Byte Order */
+    uint32_t ip; // Network Byte Order
     uint32_t expire;
     uint32_t version; // Incremented atomically on domain overwrite
     char domain[FAKEDNS_MAX_DOMAIN_LEN];
@@ -25,14 +25,14 @@ typedef struct {
 static fakedns_entry_t **g_fakedns_pool = NULL;
 static pthread_rwlock_t g_fakedns_rwlock = PTHREAD_RWLOCK_INITIALIZER;
 
-static uint32_t g_fakeip_net_host = 0; /* Host byte order */
-static uint32_t g_fakeip_mask_host = 0; /* Host byte order */
+static uint32_t g_fakeip_net_host = 0; // Host byte order
+static uint32_t g_fakeip_mask_host = 0; // Host byte order
 static uint32_t g_pool_size = 0;
 static uint32_t g_pool_used = 0;
-static uint32_t g_last_warn_used = 0;  /* for warning log throttling */
+static uint32_t g_last_warn_used = 0; // for warning log throttling
 static char g_cidr_str[64] = {0};
 
-/* Thread-local MRU cache (Pointer Array structure) for reverse lookup (lock-free optimization) */
+// Thread-local MRU cache (Pointer Array structure) for reverse lookup (lock-free optimization)
 #define FAKEDNS_MRU_SIZE 8
 typedef struct {
     uint32_t ip;
@@ -57,12 +57,15 @@ static __thread uint64_t g_mru_misses = 0;
 static __thread int64_t g_mru_last_stat_time = 0;
 #endif
 
-static const uint32_t FAKEDNS_TTL = 43200; // 12 hours
-#define FAKEDNS_TTL_REFRESH_THRESHOLD (int32_t)(FAKEDNS_TTL * 3 / 10)
+#define FAKEDNS_DNS_TTL 3600 // 1 hour — returned in DNS A/PTR responses
+#define FAKEDNS_ENTRY_LIFETIME 86400 // 24 hours — internal pool entry expiry
+#define FAKEDNS_TTL_REFRESH_THRESHOLD (int32_t)(FAKEDNS_ENTRY_LIFETIME * 3 / 10)
+_Static_assert(FAKEDNS_TTL_REFRESH_THRESHOLD >= (int32_t)FAKEDNS_DNS_TTL,
+               "REFRESH_THRESHOLD must be >= FAKEDNS_DNS_TTL to prevent client cache outliving entry");
 
 // Pool usage warning thresholds
-#define FAKEDNS_POOL_WARN_THRESHOLD   0.80f  // 80% usage warning
-#define FAKEDNS_POOL_CRITICAL_THRESHOLD 0.95f  // 95% usage critical
+#define FAKEDNS_POOL_WARN_THRESHOLD 0.80f // 80% usage warning
+#define FAKEDNS_POOL_CRITICAL_THRESHOLD 0.95f // 95% usage critical
 static uint32_t g_max_probes = 0;
 
 void fakedns_init(const char *cidr_str) {
@@ -112,9 +115,11 @@ void fakedns_init(const char *cidr_str) {
         exit(1);
     }
 
-    // Fix linear probing limit issue:
-    // We limit Max Probing strictly to 128 (approx 0.95^128 < 0.002 probability of failure at 95% load)
-    // to prevent CPU spinning and write-lock starvation on huge fake-ip CIDRs.
+    /*
+     * Fix linear probing limit issue:
+     * We limit Max Probing strictly to 128 (approx 0.95^128 < 0.002 probability of failure at 95% load)
+     * to prevent CPU spinning and write-lock starvation on huge fake-ip CIDRs.
+     */
     g_max_probes = (g_pool_size < 128) ? g_pool_size : 128;
 
     LOG_ALWAYS_INF("[fakedns_init] IP range: %s/%ld", ip_str, prefix_len);
@@ -143,7 +148,7 @@ static uint32_t fakedns_lookup_domain(const char *domain, size_t len) {
     uint32_t pool_mask = g_pool_size - 1;
     uint64_t hash = XXH3_64bits(domain, len);
     uint32_t offset = (uint32_t)(hash & pool_mask);
-    /* Double Hashing: Use upper 32 bits as step size. Must be odd (coprime to power-of-2 size). */
+    // Double Hashing: Use upper 32 bits as step size. Must be odd (coprime to power-of-2 size).
     uint32_t step = (uint32_t)(hash >> 32) | 1;
     uint32_t now = (uint32_t)time(NULL);
 
@@ -193,7 +198,7 @@ static uint32_t fakedns_lookup_domain(const char *domain, size_t len) {
                 return ip_net;
             }
 
-            __atomic_store_n(&entry->expire, now + FAKEDNS_TTL, __ATOMIC_RELAXED);
+            __atomic_store_n(&entry->expire, now + FAKEDNS_ENTRY_LIFETIME, __ATOMIC_RELAXED);
 
             return ip_net;
         }
@@ -230,7 +235,7 @@ static uint32_t fakedns_lookup_domain(const char *domain, size_t len) {
         }
 
         entry_set_domain(entry, domain, len);
-        __atomic_store_n(&entry->expire, now + FAKEDNS_TTL, __ATOMIC_RELAXED);
+        __atomic_store_n(&entry->expire, now + FAKEDNS_ENTRY_LIFETIME, __ATOMIC_RELAXED);
         __atomic_add_fetch(&entry->version, 1, __ATOMIC_RELEASE);
 
         pthread_rwlock_unlock(&g_fakedns_rwlock);
@@ -259,7 +264,7 @@ static uint32_t fakedns_lookup_domain(const char *domain, size_t len) {
         }
         entry->ip = ip_net;
         entry_set_domain(entry, domain, len);
-        entry->expire = now + FAKEDNS_TTL;
+        entry->expire = now + FAKEDNS_ENTRY_LIFETIME;
         entry->version = 1;
         __atomic_store_n(&g_fakedns_pool[offset], entry, __ATOMIC_RELEASE);
         g_pool_used++;
@@ -335,13 +340,15 @@ bool fakedns_reverse_lookup(uint32_t ip, char *buffer, size_t buf_len) {
         g_fakedns_mru_init = true;
     }
 
-    /* 1. Fast Path: Check Thread-Local MRU Cache (Lock-Free) */
+    // 1. Fast Path: Check Thread-Local MRU Cache (Lock-Free)
     for (int i = 0; i < FAKEDNS_MRU_SIZE; ++i) {
         fakedns_mru_entry_t *mru_item = g_fakedns_mru_ptrs[i];
         if (mru_item->valid && mru_item->ip == ip) {
 
-            // [DIRTY CACHE PREVENTION] Lock-free generation check!
-            // Global pool is strictly append-only or version-incremented on reuse.
+            /*
+             * [DIRTY CACHE PREVENTION] Lock-free generation check!
+             * Global pool is strictly append-only or version-incremented on reuse.
+             */
             fakedns_entry_t *g_entry = __atomic_load_n(&g_fakedns_pool[offset], __ATOMIC_ACQUIRE);
             if (!g_entry || __atomic_load_n(&g_entry->version, __ATOMIC_ACQUIRE) != mru_item->version) {
                 // The global slot was overwritten by a new domain. Cache is dirty.
@@ -386,7 +393,7 @@ bool fakedns_reverse_lookup(uint32_t ip, char *buffer, size_t buf_len) {
     g_mru_misses++;
 #endif
 
-    /* 2. Slow Path: Global Array Lookup (Read Lock) */
+    // 2. Slow Path: Global Array Lookup (Read Lock)
     char tmp_domain[FAKEDNS_MAX_DOMAIN_LEN];
     uint32_t tmp_version = 0;
     bool found = false;
@@ -408,7 +415,7 @@ bool fakedns_reverse_lookup(uint32_t ip, char *buffer, size_t buf_len) {
         memcpy(buffer, tmp_domain, copy_len);
         buffer[copy_len] = '\0';
 
-        /* 3. Update MRU Cache: Insert at front */
+        // 3. Update MRU Cache: Insert at front
         fakedns_mru_entry_t *evicted = g_fakedns_mru_ptrs[FAKEDNS_MRU_SIZE - 1];
         memmove(&g_fakedns_mru_ptrs[1], &g_fakedns_mru_ptrs[0], (FAKEDNS_MRU_SIZE - 1) * sizeof(fakedns_mru_entry_t *));
 
@@ -427,23 +434,23 @@ bool fakedns_reverse_lookup(uint32_t ip, char *buffer, size_t buf_len) {
  * Example: "1.0.0.10.in-addr.arpa" -> 10.0.0.1 (network order)
  */
 static bool fakedns_parse_ptr_name(const char *name, size_t len, uint32_t *ip_out) {
-    /* ".in-addr.arpa" = 13 chars; shortest valid: "0.0.0.0.in-addr.arpa" = 20 */
+    // ".in-addr.arpa" = 13 chars; shortest valid: "0.0.0.0.in-addr.arpa" = 20
     if (len < 20 || len > 28) {
         return false;
     }
 
-    /* Case-insensitive suffix check (RFC 1035 §2.3.3) */
+    // Case-insensitive suffix check (RFC 1035 §2.3.3)
     if (strncasecmp(name + len - 13, ".in-addr.arpa", 13) != 0) {
         return false;
     }
 
-    /* Extract IP-part before suffix into a mutable buffer */
+    // Extract IP-part before suffix into a mutable buffer
     size_t ip_len = len - 13;
-    char ip_buf[16]; /* max "255.255.255.255" = 15 + NUL */
+    char ip_buf[16]; // max "255.255.255.255" = 15 + NUL
     memcpy(ip_buf, name, ip_len);
     ip_buf[ip_len] = '\0';
 
-    /* Parse exactly 4 decimal octets separated by '.' */
+    // Parse exactly 4 decimal octets separated by '.'
     uint8_t octets[4];
     int idx = 0;
     char *saveptr;
@@ -451,10 +458,10 @@ static bool fakedns_parse_ptr_name(const char *name, size_t len, uint32_t *ip_ou
 
     while (tok && idx < 4) {
         if (tok[0] == '\0') {
-            return false; /* empty label */
+            return false; // empty label
         }
         if (tok[0] == '0' && tok[1] != '\0') {
-            return false; /* reject leading zeros */
+            return false; // reject leading zeros
         }
         char *endptr;
         unsigned long val = strtoul(tok, &endptr, 10);
@@ -469,7 +476,7 @@ static bool fakedns_parse_ptr_name(const char *name, size_t len, uint32_t *ip_ou
         return false;
     }
 
-    /* Reverse: in-addr.arpa "1.0.0.10" -> IP 10.0.0.1 */
+    // Reverse: in-addr.arpa "1.0.0.10" -> IP 10.0.0.1
     uint32_t ip_host = ((uint32_t)octets[3] << 24) | ((uint32_t)octets[2] << 16) |
                        ((uint32_t)octets[1] << 8)  | octets[0];
     *ip_out = htonl(ip_host);
@@ -490,10 +497,10 @@ static size_t fakedns_encode_dns_name(const char *domain, uint8_t *out, size_t o
         size_t label_len = dot ? (size_t)(dot - p) : strlen(p);
 
         if (label_len == 0 || label_len > 63) {
-            return 0; /* RFC 1035 §2.3.4 */
+            return 0; // RFC 1035 §2.3.4
         }
         if (pos + 1 + label_len + 1 > outlen) {
-            return 0; /* +1 len byte, +1 for final NUL */
+            return 0; // +1 len byte, +1 for final NUL
         }
 
         out[pos++] = (uint8_t)label_len;
@@ -509,7 +516,7 @@ static size_t fakedns_encode_dns_name(const char *domain, uint8_t *out, size_t o
     if (pos + 1 > outlen) {
         return 0;
     }
-    out[pos++] = 0; /* root label */
+    out[pos++] = 0; // root label
     return pos;
 }
 
@@ -523,8 +530,8 @@ size_t fakedns_process_query(const uint8_t *query, size_t qlen, uint8_t *buffer,
         return 0; // Too short or buffer too small to hold echo
     }
 
-    // Header parsing
-    // ID (2), Flags (2), QDCOUNT (2), ANCOUNT (2), NSCOUNT (2), ARCOUNT (2)
+    /* Header parsing
+     * ID (2), Flags (2), QDCOUNT (2), ANCOUNT (2), NSCOUNT (2), ARCOUNT (2) */
     //uint16_t id = (uint16_t)((query[0] << 8) | query[1]);
     uint16_t flags = (uint16_t)((query[2] << 8) | query[3]);
     uint16_t qdcount = (uint16_t)((query[4] << 8) | query[5]);
@@ -534,8 +541,8 @@ size_t fakedns_process_query(const uint8_t *query, size_t qlen, uint8_t *buffer,
         return 0; // Not a standard query or multiple questions
     }
 
-    // Copy ID and set common flags for response (QR=1, RA=1, AA=0, RD from query)
-    // RCODE=0 (Success) by default
+    /* Copy ID and set common flags for response (QR=1, RA=1, AA=0, RD from query)
+     * RCODE=0 (Success) by default */
     uint16_t resp_flags = 0x8180 | (flags & 0x0100); // QR=1, Opcode=0, AA=0, TC=0, RD=from_query, RA=1, Z=0, RCODE=0
 
     // Question parsing
@@ -614,8 +621,8 @@ size_t fakedns_process_query(const uint8_t *query, size_t qlen, uint8_t *buffer,
         return offset + 4; // Return header + question only
     }
 
-    // Construct buffer
-    // Copy Header + Question
+    /* Construct buffer
+     * Copy Header + Question */
     if (offset + 4 > buflen) {
         return 0;
     }
@@ -636,11 +643,11 @@ size_t fakedns_process_query(const uint8_t *query, size_t qlen, uint8_t *buffer,
 
     size_t resp_len = offset + 4;
 
-    if (qtype == 1) { /* A Record */
+    if (qtype == 1) { // A Record
         uint32_t fakeip = fakedns_lookup_domain(domain, dom_len);
         if (fakeip) {
-            // Add Answer
-            // Ptr to name (0xC00C - Offset 12)
+            /* Add Answer
+             * Ptr to name (0xC00C - Offset 12) */
             if (resp_len + 16 > buflen) {
                 return 0; // 2(Ptr) + 2(Type) + 2(Class) + 4(TTL) + 2(Len) + 4(IP)
             }
@@ -652,14 +659,14 @@ size_t fakedns_process_query(const uint8_t *query, size_t qlen, uint8_t *buffer,
             buffer[resp_len++] = 0x01; // Type A
             buffer[resp_len++] = 0x00;
             buffer[resp_len++] = 0x01; // Class IN
-            /* TTL */
-            uint32_t ttl_n = htonl(FAKEDNS_TTL);
+            // TTL
+            uint32_t ttl_n = htonl(FAKEDNS_DNS_TTL);
             memcpy(buffer + resp_len, &ttl_n, 4);
             resp_len += 4;
-            /* RDLENGTH = 4 */
+            // RDLENGTH = 4
             buffer[resp_len++] = 0x00;
             buffer[resp_len++] = 0x04;
-            /* RDATA */
+            // RDATA
             memcpy(buffer + resp_len, &fakeip, 4);
             resp_len += 4;
 
@@ -675,45 +682,45 @@ size_t fakedns_process_query(const uint8_t *query, size_t qlen, uint8_t *buffer,
             buffer[2] = (uint8_t)((resp_flags >> 8) & 0xFF);
             buffer[3] = (uint8_t)(resp_flags & 0xFF);
         }
-    } else if (qtype == 28) { /* AAAA Record */
+    } else if (qtype == 28) { // AAAA Record
         // Return NOERROR with 0 Answers (Handling dual-stack fallback)
         LOGINF("[fakedns] query: AAAA %s -> NODATA", domain);
-    } else if (qtype == 12) { /* PTR Record */
+    } else if (qtype == 12) { // PTR Record
         uint32_t ptr_ip;
         if (fakedns_parse_ptr_name(domain, dom_len, &ptr_ip)) {
             char ptr_domain[FAKEDNS_MAX_DOMAIN_LEN];
             if (fakedns_reverse_lookup(ptr_ip, ptr_domain, sizeof(ptr_domain))) {
-                /* Encode domain name to DNS wire format */
+                // Encode domain name to DNS wire format
                 uint8_t rdata[FAKEDNS_MAX_DOMAIN_LEN + 2];
                 size_t rdata_len = fakedns_encode_dns_name(ptr_domain, rdata, sizeof(rdata));
                 if (rdata_len > 0) {
-                    /* 2(Ptr) + 2(Type) + 2(Class) + 4(TTL) + 2(RDLength) = 12 fixed */
+                    // 2(Ptr) + 2(Type) + 2(Class) + 4(TTL) + 2(RDLength) = 12 fixed
                     if (resp_len + 12 + rdata_len > buflen) {
                         return 0;
                     }
 
                     buffer[resp_len++] = 0xC0;
-                    buffer[resp_len++] = 0x0C; /* Name pointer to QNAME at offset 12 */
+                    buffer[resp_len++] = 0x0C; // Name pointer to QNAME at offset 12
 
                     buffer[resp_len++] = 0x00;
-                    buffer[resp_len++] = 0x0C; /* Type PTR */
+                    buffer[resp_len++] = 0x0C; // Type PTR
                     buffer[resp_len++] = 0x00;
-                    buffer[resp_len++] = 0x01; /* Class IN */
+                    buffer[resp_len++] = 0x01; // Class IN
 
-                    /* TTL */
-                    uint32_t ttl_n = htonl(FAKEDNS_TTL);
+                    // TTL
+                    uint32_t ttl_n = htonl(FAKEDNS_DNS_TTL);
                     memcpy(buffer + resp_len, &ttl_n, 4);
                     resp_len += 4;
 
-                    /* RDLENGTH */
+                    // RDLENGTH
                     buffer[resp_len++] = (rdata_len >> 8) & 0xFF;
                     buffer[resp_len++] = rdata_len & 0xFF;
 
-                    /* RDATA: encoded domain name */
+                    // RDATA: encoded domain name
                     memcpy(buffer + resp_len, rdata, rdata_len);
                     resp_len += rdata_len;
 
-                    /* Set ANCOUNT = 1 */
+                    // Set ANCOUNT = 1
                     buffer[7] = 1;
 
                     LOGINF("[fakedns] query: PTR %s -> %s", domain, ptr_domain);
@@ -778,7 +785,7 @@ void fakedns_save(const char *path) {
             continue;
         }
         if (entry->expire <= now) {
-            continue;  // skip expired entries
+            continue; // skip expired entries
         }
         uint16_t dlen = (uint16_t)strlen(entry->domain);
         if (fwrite(&entry->ip, 4, 1, fp) != 1 ||
@@ -898,8 +905,8 @@ void fakedns_load(const char *path) {
             break;
         }
 
-        // Validate IP in range
-        // g_fakeip_net_host is host byte order, ip is network byte order
+        /* Validate IP in range
+         * g_fakeip_net_host is host byte order, ip is network byte order */
         uint32_t ip_host = ntohl(ip);
         uint32_t offset = ip_host - g_fakeip_net_host;
         if ((ip_host & g_fakeip_mask_host) != g_fakeip_net_host || offset >= g_pool_size) {
@@ -927,8 +934,8 @@ void fakedns_load(const char *path) {
         }
         domain[dlen] = '\0';
 
-        // Refresh TTL on load
-        uint32_t expire = now + FAKEDNS_TTL;
+        // Refresh entry lifetime on load
+        uint32_t expire = now + FAKEDNS_ENTRY_LIFETIME;
 
         // Add to array
         fakedns_entry_t *entry = g_fakedns_pool[offset];
@@ -948,8 +955,8 @@ void fakedns_load(const char *path) {
             g_pool_used++;
             loaded++;
         } else {
-            // Overwrite domain from persisted data; version not incremented
-            // because load runs at init before any MRU caches exist.
+            /* Overwrite domain from persisted data; version not incremented
+             * because load runs at init before any MRU caches exist. */
             memcpy(entry->domain, domain, dlen + 1);
             entry->expire = expire;
         }
