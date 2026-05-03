@@ -1,0 +1,113 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: ipt2socks@aarch64-linux-musl@generic+v8a
+            target: aarch64-linux-musl
+            cflags: -march=armv8-a
+          - name: ipt2socks@arm-linux-musleabi@generic
+            target: arm-linux-musleabi
+            cflags: -march=armv5te
+          - name: ipt2socks@mips-linux-musl@mips32
+            target: mips-linux-musl
+            cflags: -mips32
+          - name: ipt2socks@mips-linux-muslsf@mips32+soft_float
+            target: mips-linux-muslsf
+            cflags: -mips32 -msoft-float
+          - name: ipt2socks@mips64-linux-musl@mips64
+            target: mips64-linux-musl
+            cflags: -mips64
+          - name: ipt2socks@mips64-linux-musln32sf@mips64+soft_float
+            target: mips64-linux-musln32sf
+            cflags: -mips64 -msoft-float
+          - name: ipt2socks@mips64el-linux-musl@mips64
+            target: mips64el-linux-musl
+            cflags: -mips64
+          - name: ipt2socks@mips64el-linux-musln32sf@mips64+soft_float
+            target: mips64el-linux-musln32sf
+            cflags: -mips64 -msoft-float
+          - name: ipt2socks@mipsel-linux-musl@mips32
+            target: mipsel-linux-musl
+            cflags: -mips32
+          - name: ipt2socks@mipsel-linux-muslsf@mips32+soft_float
+            target: mipsel-linux-muslsf
+            cflags: -mips32 -msoft-float
+          - name: ipt2socks@x86_64-linux-musl@x86_64
+            target: x86_64-linux-musl
+            cflags: -march=x86-64
+          - name: ipt2socks@x86_64-linux-musl@x86_64_v2
+            target: x86_64-linux-musl
+            cflags: -march=x86-64-v2
+          - name: ipt2socks@x86_64-linux-musl@x86_64_v3
+            target: x86_64-linux-musl
+            cflags: -march=x86-64-v3
+          - name: ipt2socks@x86_64-linux-musl@x86_64_v4
+            target: x86_64-linux-musl
+            cflags: -march=x86-64-v4
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build with Docker
+        run: |
+          docker run --rm -v "$(pwd):/src" -w /src \
+              -e "ARCH_CFLAGS=${{ matrix.cflags }}" \
+              muslcc/x86_64:${{ matrix.target }} /bin/sh -c '
+          set -e
+          CPPFLAGS="-D_GNU_SOURCE -DXXH_INLINE_ALL -I./uthash -I./xxhash -DNDEBUG"
+          CFLAGS="-std=c99 -Wall -Wextra -Wvla -pthread -fno-strict-aliasing -ffunction-sections -fdata-sections ${ARCH_CFLAGS} -O3 -flto=auto"
+          LDFLAGS="-pthread -Wl,--gc-sections -O3 -flto=auto -static -s"
+          SRCS="main ctx netutils socks5 fakedns fakedns_server logutils mempool udp_proxy tcp_proxy udp_lrucache"
+
+          echo "==> Compiling libev"
+          gcc $CPPFLAGS $CFLAGS -fno-sanitize=undefined -include src/libev_config.h -w -c libev/ev.c -o libev/ev.o
+
+          echo "==> Compiling sources"
+          for m in $SRCS; do
+              gcc $CPPFLAGS $CFLAGS -c "src/${m}.c" -o "src/${m}.o"
+          done
+
+          echo "==> Linking"
+          OBJS=""; for m in $SRCS; do OBJS="$OBJS src/${m}.o"; done
+          gcc $LDFLAGS -o ipt2socks $OBJS libev/ev.o -lm
+          '
+
+          sudo chown -R $USER:$USER .
+          mv ipt2socks ${{ matrix.name }}
+          sha256sum ${{ matrix.name }} > ${{ matrix.name }}.sha256
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: |
+            ${{ matrix.name }}
+            ${{ matrix.name }}.sha256
+
+  release:
+    needs: build-and-release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+
